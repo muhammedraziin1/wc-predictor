@@ -45,6 +45,26 @@ export async function signOut() {
   await supabase.auth.signOut();
 }
 
+// Send a password-reset email. Supabase emails a link; clicking it returns the
+// user to the app in a recovery session where they can set a new password.
+export async function requestPasswordReset(email) {
+  const e = email.trim();
+  if (!e) return { error: "Enter your email first." };
+  const { error } = await supabase.auth.resetPasswordForEmail(e, {
+    redirectTo: window.location.origin,
+  });
+  if (error) return { error: error.message };
+  return { ok: true };
+}
+
+// In a recovery session (after clicking the email link), set the new password.
+export async function updatePassword(newPassword) {
+  if (!newPassword || newPassword.length < 6) return { error: "Password must be at least 6 characters." };
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) return { error: error.message };
+  return { ok: true };
+}
+
 // Current session's user + their profile, or null.
 export async function getMe() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -72,9 +92,10 @@ export async function ensureProfile(name) {
   return { ok: true };
 }
 
-// Listen for auth changes (login/logout across tabs). Returns an unsubscribe fn.
+// Listen for auth changes (login/logout across tabs). Callback gets (session, event).
+// Returns an unsubscribe fn.
 export function onAuthChange(cb) {
-  const { data } = supabase.auth.onAuthStateChange((_event, session) => cb(session));
+  const { data } = supabase.auth.onAuthStateChange((event, session) => cb(session, event));
   return () => data.subscription.unsubscribe();
 }
 

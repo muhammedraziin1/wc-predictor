@@ -6,6 +6,7 @@ import {
 import {
   signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange,
   amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult,
+  requestPasswordReset, updatePassword,
 } from "./db.js";
 import { supabaseConfigured } from "./supabase.js";
 
@@ -21,6 +22,7 @@ export default function App() {
   const [tick, setTick] = useState(0);
   const [toast, setToast] = useState("");
   const [adminMode, setAdminMode] = useState(false);
+  const [recovery, setRecovery] = useState(false); // true after clicking reset-email link
 
   useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 30000); return () => clearInterval(t); }, []);
 
@@ -43,8 +45,11 @@ export default function App() {
       await Promise.all([refresh(), loadSession()]);
       setLoaded(true);
     })();
-    // react to login/logout (also across tabs)
-    const unsub = onAuthChange(async () => { await loadSession(); });
+    // react to login/logout (also across tabs); catch password-recovery returns
+    const unsub = onAuthChange(async (_session, event) => {
+      if (event === "PASSWORD_RECOVERY") { setRecovery(true); setLoaded(true); return; }
+      await loadSession();
+    });
     return () => unsub();
   }, [refresh, loadSession]);
 
@@ -124,6 +129,7 @@ export default function App() {
   const myRow = me ? leaderboard.find((r) => r.id === me.id) : null;
 
   if (!supabaseConfigured) return <Splash text="⚠ Supabase not configured. Copy .env.example to .env and add your project URL and anon key, then restart the dev server." />;
+  if (recovery) return <RecoveryScreen onDone={async () => { setRecovery(false); await loadSession(); }} flash={flash} />;
   if (!loaded) return <Splash text="Loading…" />;
   if (!me) return <AuthScreen onAuthed={loadSession} flash={flash} />;
 
@@ -196,6 +202,17 @@ function AuthScreen({ onAuthed, flash }) {
     } finally { setBusy(false); }
   };
 
+  const forgot = async () => {
+    setErr(""); setInfo("");
+    if (!email.trim()) { setErr("Enter your email above first, then tap reset."); return; }
+    setBusy(true);
+    try {
+      const res = await requestPasswordReset(email);
+      if (res.error) { setErr(res.error); return; }
+      setInfo("Password reset link sent. Check your email.");
+    } finally { setBusy(false); }
+  };
+
   return (
     <div style={S.signWrap}>
       <style>{CSS}</style>
@@ -240,10 +257,64 @@ function AuthScreen({ onAuthed, flash }) {
           {busy ? "Please wait…" : tab === "signup" ? "Create account & play" : "Log in"}
         </button>
 
+        {tab === "login" && (
+          <button className="ghost" style={S.forgotLink} onClick={forgot} disabled={busy}>
+            Forgot password?
+          </button>
+        )}
+
         <p style={S.signFoot}>
           Real accounts with email + password. Your predictions are tied to your
           login, so only you can change them.
         </p>
+      </div>
+    </div>
+  );
+}
+
+function RecoveryScreen({ onDone, flash }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setErr("");
+    if (pw.length < 6) { setErr("Password must be at least 6 characters."); return; }
+    if (pw !== pw2) { setErr("Passwords don't match."); return; }
+    setBusy(true);
+    try {
+      const res = await updatePassword(pw);
+      if (res.error) { setErr(res.error); return; }
+      flash("Password updated");
+      await onDone();
+    } finally { setBusy(false); }
+  };
+  return (
+    <div style={S.signWrap}>
+      <style>{CSS}</style>
+      <div style={S.signCard}>
+        <div style={S.signCrest}>🔑</div>
+        <div style={S.signEyebrow}>Account recovery</div>
+        <h1 style={S.signTitle}>New password</h1>
+        <p style={S.signSub}>Choose a new password for your account.</p>
+
+        <label style={S.fieldLabel}>New password</label>
+        <input type="password" autoFocus value={pw} autoComplete="new-password"
+          onChange={(e) => { setPw(e.target.value); setErr(""); }}
+          placeholder="at least 6 characters" style={S.signInput} />
+
+        <label style={S.fieldLabel}>Confirm password</label>
+        <input type="password" value={pw2} autoComplete="new-password"
+          onChange={(e) => { setPw2(e.target.value); setErr(""); }}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+          placeholder="re-enter password" style={S.signInput} />
+
+        {err && <div style={S.signErr}>{err}</div>}
+
+        <button className="primary" style={{ ...S.signBtn, opacity: busy ? 0.6 : 1 }}
+          onClick={save} disabled={busy}>
+          {busy ? "Saving…" : "Set new password"}
+        </button>
       </div>
     </div>
   );
@@ -327,14 +398,13 @@ function PredictCard({ m, pred, setPred, locked }) {
             onChange={(e) => setPred(m.id, "a", e.target.value)} placeholder="–" style={S.scoreInput} />
         </div>
 
-        <div style={{ ...S.teamCell, alignItems: "flex-end", ...(winner === "away" ? S.teamWin : {}) }}>
+        <div style={{ ...S.teamCell, ...(winner === "away" ? S.teamWin : {}) }}>
           <span style={S.flag}>{flag(m.away)}</span>
-          <span style={{ ...S.teamLbl, textAlign: "right" }}>{m.away}</span>
+          <span style={S.teamLbl}>{m.away}</span>
         </div>
       </div>
 
-      <FunFact home={m.home} away={m.away} seed={m.id} />
-      {has && !locked && <div style={S.savedTag}>✓ Pick saved · {pred.h}-{pred.a}. Change anytime before kickoff.</div>}
+      {has && !locked && <div style={S.savedTag}>✓ Pick saved · {pred.h}-{pred.a} · change anytime before kickoff</div>}
       {locked && <div style={S.lockedTag}>🔒 Locked at kickoff</div>}
     </div>
   );
@@ -425,7 +495,7 @@ function ResultsView({ finished, me, predictions }) {
     <div style={S.col}>
       <section>
         <div style={S.sectionHead}>Results <span style={S.badge}>{finished.length} played</span></div>
-        {finished.length === 0 && <div style={S.empty}>No completed matches yet.</div>}
+        {finished.length === 0 && <div style={S.empty}>No results yet. Scores appear here as matches finish.</div>}
         {byDay.map((day) => (
           <div key={day.k}>
             <div style={S.dayLabel}>{day.k}</div>
@@ -473,7 +543,7 @@ function LeaderboardView({ leaderboard, me }) {
     <div style={S.col}>
       <section>
         <div style={S.sectionHead}>Live leaderboard</div>
-        {leaderboard.length === 0 && <div style={S.empty}>No players yet.</div>}
+        {leaderboard.length === 0 && <div style={S.empty}>The board is empty. First prediction puts you on top.</div>}
         <div style={S.lbList}>
           {leaderboard.map((r, i) => {
             const isMe = r.id === me.id;
@@ -508,7 +578,7 @@ function MyPicksView({ enriched, me, predictions }) {
     <div style={S.col}>
       <section>
         <div style={S.sectionHead}>My picks <span style={S.badge}>{totalPts} pts banked</span></div>
-        {rows.length === 0 && <div style={S.empty}>You haven't made any picks yet. Head to Matches.</div>}
+        {rows.length === 0 && <div style={S.empty}>No picks yet. Open the Matches tab to call your first score.</div>}
         {rows.map(({ m, pred, sc }) => (
           <div key={m.id} style={S.pickRow}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -588,165 +658,189 @@ const BRAND = {
   heather: "#474A4A", lightGray: "#D1D4D1",
 };
 const V = {
-  paper: "#EFE7D6",      // album page
-  paperDark: "#E4D8C0",  // page shadow / inset
-  ink: "#1F1A14",        // printed text
-  inkSoft: "#6B5F4E",    // muted print
-  green: BRAND.green, blue: BRAND.blue, red: BRAND.red,
-  foil: "#C9A227", foilLight: "#E8CC5E",
-  sticker: "#FBF7EE",    // sticker face
-  binding: "#23201B",    // dark album binding (top/bottom bars)
-  bindingSoft: "#34302A",
-  // aliases kept so older references resolve
-  bg: "#EFE7D6", panel: "#FBF7EE", panel2: "#EAE0CC", line: "#D8CBB0", line2: "#C6B594",
-  text: "#1F1A14", sub: "#6B5F4E", accent: BRAND.green, accent2: BRAND.blue, gold: "#C9A227",
-  good: BRAND.green, live: BRAND.red,
+  // Electric broadcast palette over deep space-navy glass.
+  bg0: "#05060B",          // deepest backdrop
+  bg1: "#0A0E1A",          // panel base
+  cyan: "#00E5FF",
+  green: BRAND.green,      // #3CAC3B official
+  greenBright: "#5BE66A",
+  violet: "#7A5CFF",
+  magenta: "#FF2D78",      // live / alert
+  amber: "#FFC83D",
+  text: "#EAF2FF",
+  sub: "#8A94B0",
+  // glass surfaces
+  glass: "rgba(255,255,255,0.055)",
+  glassUp: "rgba(255,255,255,0.10)",
+  stroke: "rgba(255,255,255,0.14)",
+  strokeSoft: "rgba(255,255,255,0.08)",
+  // aliases so existing references resolve
+  panel: "rgba(255,255,255,0.055)", panel2: "rgba(255,255,255,0.10)",
+  line: "rgba(255,255,255,0.14)", line2: "rgba(255,255,255,0.22)",
+  accent: "#00E5FF", accent2: "#7A5CFF", gold: "#FFC83D",
+  good: "#5BE66A", live: "#FF2D78", red: "#FF2D78", blue: "#7A5CFF",
+};
+const GRAD = {
+  electric: "linear-gradient(100deg, #00E5FF 0%, #3CAC3B 100%)",
+  electricSoft: "linear-gradient(100deg, rgba(0,229,255,.18), rgba(60,172,59,.18))",
+  violet: "linear-gradient(100deg, #7A5CFF 0%, #00E5FF 100%)",
+  live: "linear-gradient(100deg, #FF2D78 0%, #7A5CFF 100%)",
 };
 const CSS = `
 *{box-sizing:border-box;} body{margin:0;}
-@import url('https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@500;600;700;800;900&family=Archivo+Narrow:wght@600;700&display=swap');
-.primary:hover{filter:brightness(1.05) saturate(1.1);}
-.ghost:hover{filter:brightness(0.97);}
-.num:focus,input:focus{outline:3px solid ${V.green};outline-offset:1px;}
-.lbrow:hover{filter:brightness(0.98);cursor:pointer;}
-.navbtn:active{transform:scale(.92);}
-.menuitem:hover{background:${V.paperDark};}
-.sticker{position:relative;}
-.sticker::after{content:"";position:absolute;inset:0;border-radius:14px;pointer-events:none;
-  background:linear-gradient(135deg,rgba(255,255,255,.55) 0%,rgba(255,255,255,0) 28%,rgba(255,255,255,0) 72%,rgba(255,255,255,.30) 100%);}
-::-webkit-scrollbar{width:10px;height:10px;}
-::-webkit-scrollbar-thumb{background:${V.line2};border-radius:8px;border:2px solid ${V.paper};}
-@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
-@keyframes shine{0%{background-position:-120% 0;}100%{background-position:220% 0;}}
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Chakra+Petch:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+.primary:hover{filter:brightness(1.12) saturate(1.1);box-shadow:0 0 28px rgba(0,229,255,.5);}
+.ghost:hover{border-color:rgba(255,255,255,.28);color:#fff;}
+.num:focus,input:focus{outline:none;border-color:#00E5FF;box-shadow:0 0 0 3px rgba(0,229,255,.25),0 0 18px rgba(0,229,255,.3);}
+.lbrow:hover{cursor:pointer;background:rgba(255,255,255,.09);}
+.navbtn:active{transform:scale(.9);}
+.menuitem:hover{background:rgba(255,255,255,.08);}
+::-webkit-scrollbar{width:9px;height:9px;}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:8px;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+@keyframes sweep{0%{background-position:-160% 0;}100%{background-position:260% 0;}}
+@keyframes floaty{0%,100%{transform:translateY(0);}50%{transform:translateY(-3px);}}
 @media (prefers-reduced-motion: reduce){*{animation:none !important;}}
 `;
-// Condensed poster face for names/scores; clean grotesque for body.
-const FONT = "Archivo, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-const DISPLAY = "Anton, 'Archivo Narrow', " + FONT;
-// reusable bits
-const STICKER = { background: V.sticker, borderRadius: 14, border: `2px solid ${V.ink}`,
-  boxShadow: `4px 5px 0 ${V.paperDark}, 0 1px 0 rgba(255,255,255,.8) inset` };
-const PAGE_TEXTURE = "radial-gradient(circle at 50% 0%, rgba(255,255,255,.5), rgba(255,255,255,0) 60%), repeating-linear-gradient(0deg, rgba(0,0,0,.012) 0 2px, rgba(0,0,0,0) 2px 4px)";
+const FONT = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const DISPLAY = "'Chakra Petch', 'Rajdhani', " + FONT;   // technical / broadcast
+const NUM = "'Rajdhani', 'Chakra Petch', " + FONT;       // tabular timer numerals
+// atmospheric backdrop: pitch glow + colored mesh blobs
+const BACKDROP = [
+  "radial-gradient(900px 520px at 50% -8%, rgba(0,229,255,.16), rgba(0,229,255,0) 60%)",
+  "radial-gradient(700px 500px at 100% 12%, rgba(122,92,255,.16), rgba(122,92,255,0) 55%)",
+  "radial-gradient(680px 460px at 0% 30%, rgba(60,172,59,.14), rgba(60,172,59,0) 55%)",
+  "linear-gradient(180deg, #0A0E1A 0%, #05060B 100%)",
+].join(",");
+const GLASS = {
+  background: V.glass,
+  backdropFilter: "blur(18px) saturate(1.3)",
+  WebkitBackdropFilter: "blur(18px) saturate(1.3)",
+  border: `1px solid ${V.stroke}`,
+  borderRadius: 18,
+  boxShadow: "0 10px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.14)",
+};
 const S = {
-  page: { minHeight: "100vh", background: `${V.paper}`, backgroundImage: PAGE_TEXTURE, color: V.ink, fontFamily: FONT, paddingBottom: 84 },
+  page: { minHeight: "100vh", background: BACKDROP, backgroundAttachment: "fixed", color: V.text, fontFamily: FONT, paddingBottom: 92 },
   main: { maxWidth: 560, margin: "0 auto", padding: "16px 14px 24px" },
-  col: { display: "flex", flexDirection: "column", gap: 26 },
+  col: { display: "flex", flexDirection: "column", gap: 24 },
 
   /* sign in */
-  signWrap: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 20,
-    background: V.paper, backgroundImage: PAGE_TEXTURE, color: V.ink, fontFamily: FONT },
-  signCard: { width: "100%", maxWidth: 390, ...STICKER, padding: 30, textAlign: "center", boxShadow: `7px 9px 0 ${V.ink}` },
-  signCrest: { fontSize: 52, marginBottom: 4, filter: "saturate(1.2)" },
-  signEyebrow: { color: V.red, fontSize: 12, fontWeight: 800, letterSpacing: 3, textTransform: "uppercase", fontFamily: FONT },
-  signTitle: { fontFamily: DISPLAY, fontSize: 48, fontWeight: 400, margin: "0 0 6px", letterSpacing: 1, lineHeight: .92, textTransform: "uppercase", color: V.ink },
-  signSub: { color: V.inkSoft, fontSize: 14, lineHeight: 1.5, margin: "0 0 22px", fontWeight: 500 },
-  signInput: { width: "100%", background: "#fff", border: `2px solid ${V.ink}`, color: V.ink, borderRadius: 10, padding: "13px 14px", fontSize: 16, textAlign: "center", marginBottom: 10, fontWeight: 600, fontFamily: FONT },
-  fieldLabel: { display: "block", textAlign: "left", color: V.inkSoft, fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1.2, margin: "2px 2px 6px" },
-  signErr: { background: "rgba(230,29,37,.12)", border: `2px solid ${V.red}`, color: "#a8131a", fontSize: 13, fontWeight: 700, borderRadius: 9, padding: "9px 12px", marginBottom: 10 },
-  signInfo: { background: "rgba(60,172,59,.14)", border: `2px solid ${V.green}`, color: "#256b24", fontSize: 13, fontWeight: 700, borderRadius: 9, padding: "9px 12px", marginBottom: 10 },
-  authTabs: { display: "flex", gap: 6, marginBottom: 20 },
-  authTab: { flex: 1, background: V.paperDark, border: `2px solid ${V.ink}`, color: V.inkSoft, fontSize: 14, fontWeight: 800, padding: "10px 0", borderRadius: 9, cursor: "pointer", textTransform: "uppercase", letterSpacing: .5, fontFamily: FONT },
-  authTabOn: { background: V.green, color: "#fff" },
-  rememberRow: { display: "flex", alignItems: "center", gap: 8, color: V.inkSoft, fontSize: 13, marginBottom: 14, cursor: "pointer", justifyContent: "flex-start", fontWeight: 600 },
-  signBtn: { width: "100%", background: V.green, color: "#fff", border: `2px solid ${V.ink}`, borderRadius: 10, padding: "15px", fontWeight: 800, fontSize: 16, cursor: "pointer", textTransform: "uppercase", letterSpacing: 1, fontFamily: FONT, boxShadow: `3px 4px 0 ${V.ink}` },
-  signReturn: { marginTop: 18, paddingTop: 16, borderTop: `2px dashed ${V.line2}` },
+  signWrap: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 20, background: BACKDROP, backgroundAttachment: "fixed", color: V.text, fontFamily: FONT },
+  signCard: { width: "100%", maxWidth: 390, ...GLASS, padding: 30, textAlign: "center" },
+  signCrest: { fontSize: 50, marginBottom: 4, filter: "drop-shadow(0 0 16px rgba(0,229,255,.6))" },
+  signEyebrow: { background: GRAD.electric, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", fontSize: 12, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", fontFamily: DISPLAY },
+  signTitle: { fontFamily: DISPLAY, fontSize: 46, fontWeight: 700, margin: "2px 0 8px", letterSpacing: 2, lineHeight: .95, textTransform: "uppercase", color: "#fff", textShadow: "0 0 30px rgba(0,229,255,.35)" },
+  signSub: { color: V.sub, fontSize: 14, lineHeight: 1.5, margin: "0 0 22px", fontWeight: 500 },
+  signInput: { width: "100%", background: "rgba(0,0,0,.35)", border: `1px solid ${V.stroke}`, color: V.text, borderRadius: 12, padding: "14px 16px", fontSize: 16, textAlign: "center", marginBottom: 10, fontWeight: 600, fontFamily: NUM, letterSpacing: .5 },
+  fieldLabel: { display: "block", textAlign: "left", color: V.sub, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1.5, margin: "2px 2px 6px", fontFamily: DISPLAY },
+  signErr: { background: "rgba(255,45,120,.14)", border: `1px solid rgba(255,45,120,.5)`, color: "#ff8fb4", fontSize: 13, fontWeight: 600, borderRadius: 10, padding: "9px 12px", marginBottom: 10 },
+  signInfo: { background: "rgba(91,230,106,.12)", border: `1px solid rgba(91,230,106,.45)`, color: "#9af0a3", fontSize: 13, fontWeight: 600, borderRadius: 10, padding: "9px 12px", marginBottom: 10 },
+  authTabs: { display: "flex", gap: 6, background: "rgba(0,0,0,.3)", borderRadius: 12, padding: 5, marginBottom: 20, border: `1px solid ${V.strokeSoft}` },
+  authTab: { flex: 1, background: "none", border: "none", color: V.sub, fontSize: 13, fontWeight: 700, padding: "10px 0", borderRadius: 8, cursor: "pointer", textTransform: "uppercase", letterSpacing: 1, fontFamily: DISPLAY },
+  authTabOn: { background: GRAD.electric, color: "#04121a", boxShadow: "0 0 20px rgba(0,229,255,.4)" },
+  rememberRow: { display: "flex", alignItems: "center", gap: 8, color: V.sub, fontSize: 13, marginBottom: 14, cursor: "pointer", justifyContent: "flex-start", fontWeight: 500 },
+  signBtn: { width: "100%", background: GRAD.electric, color: "#04121a", border: "none", borderRadius: 12, padding: "15px", fontWeight: 700, fontSize: 15, cursor: "pointer", textTransform: "uppercase", letterSpacing: 1.5, fontFamily: DISPLAY, boxShadow: "0 0 24px rgba(0,229,255,.35)" },
+  signReturn: { marginTop: 18, paddingTop: 16, borderTop: `1px solid ${V.strokeSoft}` },
   chipWrap: { display: "flex", flexWrap: "wrap", gap: 7, justifyContent: "center", marginTop: 8 },
-  returnChip: { background: V.paperDark, border: `2px solid ${V.ink}`, color: V.ink, borderRadius: 20, padding: "6px 14px", fontSize: 13, cursor: "pointer", fontWeight: 700 },
-  signFoot: { color: V.inkSoft, fontSize: 11, marginTop: 18, marginBottom: 0, lineHeight: 1.5, fontWeight: 500 },
+  returnChip: { background: V.glass, border: `1px solid ${V.stroke}`, color: V.text, borderRadius: 20, padding: "6px 14px", fontSize: 13, cursor: "pointer", fontWeight: 600 },
+  signFoot: { color: V.sub, fontSize: 11, marginTop: 18, marginBottom: 0, lineHeight: 1.5 },
+  forgotLink: { display: "block", width: "100%", background: "none", border: "none", color: V.cyan, fontSize: 13, fontWeight: 600, padding: "12px 0 0", cursor: "pointer", textAlign: "center", fontFamily: FONT },
 
-  /* top bar — album binding */
-  top: { position: "sticky", top: 0, zIndex: 20, background: V.binding, borderBottom: `3px solid ${V.foil}` },
-  topInner: { maxWidth: 560, margin: "0 auto", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" },
+  /* top bar */
+  top: { position: "sticky", top: 0, zIndex: 20, background: "rgba(5,6,11,.6)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: `1px solid ${V.stroke}` },
+  topInner: { maxWidth: 560, margin: "0 auto", padding: "11px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" },
   topBrand: { display: "flex", alignItems: "center", gap: 10 },
-  topCrest: { fontSize: 26 },
-  topTitle: { fontFamily: DISPLAY, fontWeight: 400, fontSize: 20, letterSpacing: .5, color: "#fff", textTransform: "uppercase", lineHeight: 1 },
-  topSub: { color: "#c9bda4", fontSize: 12, fontWeight: 600 },
+  topCrest: { fontSize: 24, filter: "drop-shadow(0 0 10px rgba(0,229,255,.5))" },
+  topTitle: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 17, letterSpacing: 1, color: "#fff", textTransform: "uppercase" },
+  topSub: { color: V.sub, fontSize: 12, fontWeight: 500 },
   topRight: { display: "flex", alignItems: "center", gap: 8, position: "relative" },
-  rankPill: { display: "flex", alignItems: "center", gap: 4, background: V.foil, border: `2px solid ${V.ink}`, borderRadius: 8, padding: "5px 11px", fontSize: 14, color: V.ink, fontWeight: 800 },
-  rankDot: { color: V.ink, margin: "0 2px", opacity: .5 },
-  gear: { background: V.bindingSoft, border: `2px solid ${V.foil}`, color: "#fff", borderRadius: 8, width: 36, height: 36, fontSize: 18, cursor: "pointer", lineHeight: 1 },
-  menu: { position: "absolute", top: 44, right: 0, background: V.sticker, border: `2px solid ${V.ink}`, borderRadius: 10, padding: 6, minWidth: 210, boxShadow: `5px 6px 0 ${V.ink}`, zIndex: 30 },
-  menuItem: { display: "block", width: "100%", textAlign: "left", background: "none", border: "none", color: V.ink, padding: "10px 12px", borderRadius: 7, fontSize: 13, cursor: "pointer", fontWeight: 600 },
+  rankPill: { display: "flex", alignItems: "center", gap: 4, background: V.glass, border: `1px solid ${V.stroke}`, borderRadius: 10, padding: "6px 12px", fontSize: 14, fontFamily: NUM, fontWeight: 700 },
+  rankDot: { color: V.sub, margin: "0 2px" },
+  gear: { background: V.glass, border: `1px solid ${V.stroke}`, color: V.text, borderRadius: 10, width: 36, height: 36, fontSize: 18, cursor: "pointer", lineHeight: 1 },
+  menu: { position: "absolute", top: 44, right: 0, ...GLASS, borderRadius: 12, padding: 6, minWidth: 210, zIndex: 30 },
+  menuItem: { display: "block", width: "100%", textAlign: "left", background: "none", border: "none", color: V.text, padding: "10px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 500 },
 
   /* sections */
-  sectionHead: { display: "flex", alignItems: "center", gap: 10, fontFamily: DISPLAY, fontWeight: 400, fontSize: 28, marginBottom: 14, letterSpacing: .5, textTransform: "uppercase", color: V.ink, lineHeight: 1 },
-  badge: { background: V.red, color: "#fff", fontSize: 11, fontWeight: 800, padding: "4px 10px", borderRadius: 20, border: `2px solid ${V.ink}`, textTransform: "uppercase", letterSpacing: .5 },
-  lockBadge: { background: V.paperDark, color: V.inkSoft, fontSize: 11, fontWeight: 800, padding: "4px 10px", borderRadius: 20, border: `2px solid ${V.line2}`, textTransform: "uppercase", letterSpacing: .5 },
-  previewCard: { display: "flex", alignItems: "center", gap: 10, background: V.paperDark, border: `2px dashed ${V.line2}`, borderRadius: 12, padding: "11px 13px", marginBottom: 9, opacity: .85 },
-  previewTeams: { flex: 1, fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: V.ink },
-  previewTime: { fontSize: 12, color: V.inkSoft, whiteSpace: "nowrap", fontWeight: 600 },
-  liveDot: { width: 9, height: 9, borderRadius: "50%", background: V.red, animation: "pulse 1.4s infinite" },
-  dayLabel: { color: V.inkSoft, fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1.5, margin: "18px 0 10px" },
-  empty: { color: V.inkSoft, fontSize: 14, textAlign: "center", padding: "28px 0", fontWeight: 600 },
+  sectionHead: { display: "flex", alignItems: "center", gap: 10, fontFamily: DISPLAY, fontWeight: 700, fontSize: 22, marginBottom: 14, letterSpacing: 1, textTransform: "uppercase", color: "#fff" },
+  badge: { background: GRAD.electric, color: "#04121a", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20, textTransform: "uppercase", letterSpacing: .5, boxShadow: "0 0 16px rgba(0,229,255,.35)" },
+  lockBadge: { background: V.glass, color: V.sub, fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20, border: `1px solid ${V.stroke}`, textTransform: "uppercase", letterSpacing: .5 },
+  previewCard: { display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,.03)", border: `1px solid ${V.strokeSoft}`, borderRadius: 14, padding: "11px 14px", marginBottom: 9, opacity: .9 },
+  previewTeams: { flex: 1, fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: V.text, fontFamily: DISPLAY, textTransform: "uppercase", letterSpacing: .3 },
+  previewTime: { fontSize: 12, color: V.sub, whiteSpace: "nowrap", fontFamily: NUM, fontWeight: 600 },
+  liveDot: { width: 9, height: 9, borderRadius: "50%", background: V.magenta, boxShadow: "0 0 12px rgba(255,45,120,.9)", animation: "pulse 1.3s infinite" },
+  dayLabel: { color: V.cyan, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 2, margin: "18px 0 10px", fontFamily: DISPLAY },
+  empty: { color: V.sub, fontSize: 14, textAlign: "center", padding: "30px 0", fontWeight: 500 },
 
-  /* match card — the sticker */
-  mCard: { ...STICKER, padding: 15, marginBottom: 13, position: "relative" },
-  mCardDone: { boxShadow: `4px 5px 0 ${V.green}, 0 1px 0 rgba(255,255,255,.8) inset`, borderColor: V.green },
-  mTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
-  grpTag: { fontFamily: DISPLAY, fontSize: 14, fontWeight: 400, color: "#fff", background: V.blue, padding: "3px 10px 2px", borderRadius: 6, border: `2px solid ${V.ink}`, textTransform: "uppercase", letterSpacing: .5 },
-  kick: { fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5 },
-  mTeams: { display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 8 },
-  teamCell: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, background: "none", border: "2px solid transparent", borderRadius: 12, padding: "8px 6px", minWidth: 0 },
-  teamWin: { background: "rgba(60,172,59,.14)", borderColor: V.green },
-  flag: { fontSize: 40, lineHeight: 1, filter: "drop-shadow(1px 1px 0 rgba(0,0,0,.15))" },
-  teamLbl: { fontFamily: DISPLAY, fontWeight: 400, fontSize: 16, lineHeight: 1, color: V.ink, textTransform: "uppercase", textAlign: "center", letterSpacing: .3 },
-  scoreBox: { display: "flex", alignItems: "center", gap: 6 },
-  scoreInput: { width: 48, height: 56, textAlign: "center", background: "#fff", border: `2px solid ${V.ink}`, color: V.ink, borderRadius: 10, fontSize: 28, fontWeight: 400, fontFamily: DISPLAY },
-  colon: { color: V.inkSoft, fontSize: 22, fontWeight: 800 },
-  savedTag: { marginTop: 11, fontSize: 12, color: "#256b24", fontWeight: 700, textAlign: "center" },
-  lockedTag: { marginTop: 11, fontSize: 12, color: V.inkSoft, fontWeight: 600, textAlign: "center" },
-  liveTeams: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 15, fontWeight: 700, padding: "4px 0", fontFamily: DISPLAY, textTransform: "uppercase", letterSpacing: .3 },
+  /* match card — broadcast VS panel */
+  mCard: { ...GLASS, padding: 24, marginBottom: 14, position: "relative", overflow: "hidden" },
+  mCardDone: { border: `1px solid rgba(0,229,255,.4)`, boxShadow: "0 10px 40px rgba(0,0,0,.5), 0 0 30px rgba(0,229,255,.18), inset 0 1px 0 rgba(255,255,255,.14)" },
+  mTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
+  grpTag: { fontFamily: DISPLAY, fontSize: 12, fontWeight: 700, color: V.cyan, background: "rgba(0,229,255,.1)", padding: "3px 10px", borderRadius: 6, border: `1px solid rgba(0,229,255,.3)`, textTransform: "uppercase", letterSpacing: 1 },
+  kick: { fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, fontFamily: NUM },
+  mTeams: { display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "stretch", gap: 16 },
+  teamCell: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, background: "rgba(255,255,255,.03)", border: "1px solid transparent", borderRadius: 14, padding: "16px 8px", minWidth: 0, transition: "all .2s" },
+  teamWin: { background: GRAD.electricSoft, borderColor: "rgba(0,229,255,.5)", boxShadow: "0 0 22px rgba(0,229,255,.25)" },
+  flag: { fontSize: 44, lineHeight: 1, filter: "drop-shadow(0 4px 12px rgba(0,0,0,.55))" },
+  teamLbl: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 15, lineHeight: 1, color: "#fff", textTransform: "uppercase", textAlign: "center", letterSpacing: .5 },
+  scoreBox: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8 },
+  scoreInput: { width: 52, height: 64, textAlign: "center", background: "rgba(0,0,0,.4)", border: `1px solid ${V.stroke}`, color: "#fff", borderRadius: 12, fontSize: 34, fontWeight: 700, fontFamily: NUM, boxShadow: "inset 0 0 18px rgba(0,229,255,.1)" },
+  colon: { color: V.cyan, fontSize: 26, fontWeight: 700, textShadow: "0 0 12px rgba(0,229,255,.8)", fontFamily: NUM },
+  savedTag: { marginTop: 24, fontSize: 12, color: V.greenBright, fontWeight: 600, textAlign: "center", letterSpacing: .3 },
+  lockedTag: { marginTop: 24, fontSize: 12, color: V.sub, fontWeight: 500, textAlign: "center" },
+  liveTeams: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 15, fontWeight: 700, padding: "4px 0", fontFamily: DISPLAY, textTransform: "uppercase", letterSpacing: .5 },
 
-  /* fun fact */
-  factWrap: { display: "flex", gap: 9, marginTop: 13, padding: "10px 12px", background: V.paperDark, borderRadius: 9, border: `2px dashed ${V.line2}` },
+  /* fun fact (kept for possible match-detail use; no longer in prediction card) */
+  factWrap: { display: "flex", gap: 9, marginTop: 13, padding: "10px 12px", background: "rgba(0,0,0,.25)", borderRadius: 12, border: `1px solid ${V.strokeSoft}` },
   factFlag: { fontSize: 20, lineHeight: 1.3, flexShrink: 0 },
-  factText: { fontSize: 12, color: V.inkSoft, lineHeight: 1.45, fontWeight: 500 },
+  factText: { fontSize: 12, color: V.sub, lineHeight: 1.45, fontWeight: 500 },
   /* venue */
-  venueRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 12 },
-  venueDot: { width: 8, height: 8, borderRadius: "50%", flexShrink: 0, border: `1px solid ${V.ink}` },
-  venueText: { fontSize: 11, color: V.inkSoft, fontWeight: 800, letterSpacing: .8, textTransform: "uppercase" },
+  venueRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 24 },
+  venueDot: { width: 8, height: 8, borderRadius: "50%", flexShrink: 0, boxShadow: "0 0 8px currentColor" },
+  venueText: { fontSize: 11, color: V.sub, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", fontFamily: DISPLAY },
 
   /* leaderboard */
   lbList: { display: "flex", flexDirection: "column", gap: 9 },
-  lbRow: { display: "flex", alignItems: "center", gap: 11, padding: "12px 13px", borderRadius: 12, ...STICKER },
-  lbMe: { boxShadow: `4px 5px 0 ${V.foil}, 0 1px 0 rgba(255,255,255,.8) inset`, borderColor: V.foil },
-  lbRank: (i) => ({ width: 34, height: 34, borderRadius: "50%", display: "grid", placeItems: "center", fontWeight: 400, fontSize: 17, flexShrink: 0, fontFamily: DISPLAY, border: `2px solid ${V.ink}`,
-    color: i < 3 ? V.ink : "#fff", background: i === 0 ? V.foil : i === 1 ? "#C7C2B6" : i === 2 ? "#CD7F32" : V.inkSoft }),
-  lbName: { flex: 1, fontFamily: DISPLAY, fontWeight: 400, fontSize: 20, display: "flex", alignItems: "center", gap: 8, minWidth: 0, textTransform: "uppercase", letterSpacing: .3, color: V.ink },
-  youTag: { fontSize: 10, fontWeight: 800, color: "#fff", background: V.red, borderRadius: 5, padding: "2px 7px", border: `1.5px solid ${V.ink}`, letterSpacing: .5 },
-  lbStat: { color: V.inkSoft, fontSize: 11, whiteSpace: "nowrap", fontWeight: 700 },
-  lbPts: { fontFamily: DISPLAY, fontWeight: 400, fontSize: 28, minWidth: 44, textAlign: "right", color: V.ink },
-  foot: { color: V.inkSoft, fontSize: 12, marginTop: 14, lineHeight: 1.5, fontWeight: 500 },
+  lbRow: { display: "flex", alignItems: "center", gap: 11, padding: "13px 14px", borderRadius: 14, ...GLASS },
+  lbMe: { border: `1px solid rgba(255,200,61,.55)`, boxShadow: "0 10px 40px rgba(0,0,0,.5), 0 0 26px rgba(255,200,61,.22), inset 0 1px 0 rgba(255,255,255,.14)" },
+  lbRank: (i) => ({ width: 36, height: 36, borderRadius: 10, display: "grid", placeItems: "center", fontWeight: 700, fontSize: 18, flexShrink: 0, fontFamily: NUM, color: "#04121a",
+    background: i === 0 ? "linear-gradient(135deg,#FFC83D,#FF9E2D)" : i === 1 ? "linear-gradient(135deg,#D7E0F0,#9FB0CC)" : i === 2 ? "linear-gradient(135deg,#E0954E,#B36A2E)" : "rgba(255,255,255,.1)",
+    boxShadow: i < 3 ? "0 0 18px rgba(255,200,61,.3)" : "none", ...(i > 2 ? { color: "#fff" } : {}) }),
+  lbName: { flex: 1, fontFamily: DISPLAY, fontWeight: 700, fontSize: 18, display: "flex", alignItems: "center", gap: 8, minWidth: 0, textTransform: "uppercase", letterSpacing: .5, color: "#fff" },
+  youTag: { fontSize: 10, fontWeight: 700, color: "#04121a", background: V.cyan, borderRadius: 5, padding: "2px 7px", letterSpacing: .5, boxShadow: "0 0 12px rgba(0,229,255,.5)" },
+  lbStat: { color: V.sub, fontSize: 11, whiteSpace: "nowrap", fontWeight: 600, fontFamily: NUM },
+  lbPts: { fontFamily: NUM, fontWeight: 700, fontSize: 30, minWidth: 46, textAlign: "right", color: "#fff", textShadow: "0 0 16px rgba(0,229,255,.4)" },
+  foot: { color: V.sub, fontSize: 12, marginTop: 14, lineHeight: 1.5 },
 
   /* my picks */
-  pickRow: { display: "flex", alignItems: "center", gap: 12, ...STICKER, padding: "12px 14px", marginBottom: 9 },
-  pickTeams: { fontFamily: DISPLAY, fontWeight: 400, fontSize: 16, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textTransform: "uppercase", letterSpacing: .3, color: V.ink },
-  pickMeta: { color: V.inkSoft, fontSize: 11, marginTop: 3, fontWeight: 600 },
+  pickRow: { display: "flex", alignItems: "center", gap: 12, ...GLASS, padding: "13px 14px", marginBottom: 9 },
+  pickTeams: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textTransform: "uppercase", letterSpacing: .4, color: "#fff" },
+  pickMeta: { color: V.sub, fontSize: 11, marginTop: 3, fontWeight: 500, fontFamily: NUM },
   pickScores: { textAlign: "center", minWidth: 64 },
-  pickPred: { fontFamily: DISPLAY, fontWeight: 400, fontSize: 22, color: V.ink },
-  pickActual: { color: V.inkSoft, fontSize: 11, marginTop: 1, fontWeight: 600 },
-  pickPts: { fontFamily: DISPLAY, fontWeight: 400, fontSize: 24, minWidth: 44, textAlign: "right" },
+  pickPred: { fontFamily: NUM, fontWeight: 700, fontSize: 24, color: "#fff" },
+  pickActual: { color: V.sub, fontSize: 11, marginTop: 1, fontFamily: NUM, fontWeight: 600 },
+  pickPts: { fontFamily: NUM, fontWeight: 700, fontSize: 26, minWidth: 46, textAlign: "right" },
 
   /* admin */
   filterRow: { display: "flex", gap: 7, marginBottom: 14 },
-  filterBtn: { background: V.sticker, border: `2px solid ${V.ink}`, color: V.inkSoft, borderRadius: 20, padding: "7px 15px", fontSize: 12, fontWeight: 800, cursor: "pointer", textTransform: "uppercase", letterSpacing: .5 },
-  filterOn: { background: V.green, color: "#fff" },
-  adminRow: { display: "flex", alignItems: "center", gap: 12, ...STICKER, padding: "11px 14px", marginBottom: 9 },
+  filterBtn: { background: V.glass, border: `1px solid ${V.stroke}`, color: V.sub, borderRadius: 20, padding: "7px 15px", fontSize: 12, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: .5, fontFamily: DISPLAY },
+  filterOn: { background: GRAD.electric, color: "#04121a", border: "1px solid transparent", boxShadow: "0 0 16px rgba(0,229,255,.35)" },
+  adminRow: { display: "flex", alignItems: "center", gap: 12, ...GLASS, padding: "12px 14px", marginBottom: 9 },
 
   /* results view */
-  resCard: { ...STICKER, padding: 15, marginBottom: 11 },
-  resTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
-  resPts: { fontFamily: DISPLAY, fontWeight: 400, fontSize: 18 },
+  resCard: { ...GLASS, padding: 24, marginBottom: 14 },
+  resTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
+  resPts: { fontFamily: NUM, fontWeight: 700, fontSize: 18 },
   resScoreRow: { display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 10 },
-  resTeam: { fontFamily: DISPLAY, fontSize: 16, lineHeight: 1, textTransform: "uppercase", letterSpacing: .3 },
-  resScore: { fontFamily: DISPLAY, fontWeight: 400, fontSize: 32, whiteSpace: "nowrap", color: V.ink },
-  resYourPick: { marginTop: 12, fontSize: 12, color: V.inkSoft, borderTop: `2px dashed ${V.line2}`, paddingTop: 9, fontWeight: 600 },
+  resTeam: { fontFamily: DISPLAY, fontSize: 15, lineHeight: 1.1, textTransform: "uppercase", letterSpacing: .4 },
+  resScore: { fontFamily: NUM, fontWeight: 700, fontSize: 34, whiteSpace: "nowrap", color: "#fff", textShadow: "0 0 18px rgba(0,229,255,.35)" },
+  resYourPick: { marginTop: 16, fontSize: 12, color: V.sub, borderTop: `1px solid ${V.strokeSoft}`, paddingTop: 12, fontWeight: 500 },
 
-  /* bottom nav — album binding */
-  bottom: { position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 20, background: V.binding, borderTop: `3px solid ${V.foil}`, display: "flex", justifyContent: "space-around", padding: "9px 0 calc(9px + env(safe-area-inset-bottom))", maxWidth: 560, margin: "0 auto" },
-  navBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", color: "#c9bda4", fontSize: 10, fontWeight: 800, cursor: "pointer", padding: "4px 10px", borderRadius: 9, position: "relative", flex: 1, textTransform: "uppercase", letterSpacing: .5 },
-  navOn: { color: "#fff" },
+  /* bottom nav */
+  bottom: { position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 20, background: "rgba(5,6,11,.7)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderTop: `1px solid ${V.stroke}`, display: "flex", justifyContent: "space-around", padding: "10px 0 calc(10px + env(safe-area-inset-bottom))", maxWidth: 560, margin: "0 auto" },
+  navBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 4, background: "none", border: "none", color: V.sub, fontSize: 10, fontWeight: 700, cursor: "pointer", padding: "4px 12px", borderRadius: 10, position: "relative", flex: 1, textTransform: "uppercase", letterSpacing: .5, fontFamily: DISPLAY },
+  navOn: { color: V.cyan, textShadow: "0 0 12px rgba(0,229,255,.6)" },
   navIcon: { fontSize: 20 },
 
-  toast: { position: "fixed", bottom: 90, left: "50%", transform: "translateX(-50%)", background: V.ink, color: V.sticker, padding: "11px 22px", borderRadius: 10, fontWeight: 800, fontSize: 13, zIndex: 60, boxShadow: `4px 5px 0 ${V.foil}`, border: `2px solid ${V.foil}`, textTransform: "uppercase", letterSpacing: .5 },
+  toast: { position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", ...GLASS, color: "#fff", padding: "12px 22px", borderRadius: 12, fontWeight: 700, fontSize: 13, zIndex: 60, textTransform: "uppercase", letterSpacing: .5, fontFamily: DISPLAY, boxShadow: "0 0 30px rgba(0,229,255,.3)" },
 };
