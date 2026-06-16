@@ -150,17 +150,65 @@ export async function savePrediction(userId, matchId, home, away) {
 export async function getResults() {
   const { data, error } = await supabase
     .from("results")
-    .select("match_id, home, away");
+    .select("match_id, home, away, adv");
   if (error) throw error;
   const out = {};
-  for (const row of data || []) out[row.match_id] = { h: row.home, a: row.away };
+  for (const row of data || []) {
+    out[row.match_id] = { h: row.home, a: row.away, ...(row.adv ? { adv: row.adv } : {}) };
+  }
   return out;
 }
 
-// Organizer-only (enforced by RLS). Throws if a non-organizer tries.
-export async function saveResult(matchId, home, away) {
+// Organizer-only (enforced by RLS). `adv` ('home'|'away') is optional, used for
+// knockout matches to record who advanced (e.g. on penalties).
+export async function saveResult(matchId, home, away, adv) {
+  const row = { match_id: matchId, home, away };
+  if (adv === "home" || adv === "away") row.adv = adv;
   const { error } = await supabase
     .from("results")
-    .upsert({ match_id: matchId, home, away }, { onConflict: "match_id" });
+    .upsert(row, { onConflict: "match_id" });
   if (error) throw error;
+}
+
+/* --------------------------- knockout fixtures --------------------------- */
+// Dynamic KO fixtures created by the sync as teams become known. Group
+// fixtures are hardcoded in the app; these are merged in at runtime.
+export async function getFixtures() {
+  const { data, error } = await supabase
+    .from("fixtures")
+    .select("id, kickoff, home, away, stage, city, country, accent");
+  if (error) {
+    // Table may not exist yet (before knockout_fixtures.sql is run) — degrade gracefully.
+    console.warn("getFixtures: ", error.message);
+    return [];
+  }
+  return data || [];
+}
+
+/* --------------------------- prediction stats --------------------------- */
+// "How everyone predicted" a given match: distribution of scorelines + result
+// split. Only meaningful to reveal once the match is locked (caller enforces).
+export async function getPredictionStats(matchId) {
+  const { data, error } = await supabase
+    .from("predictions")
+    .select("home, away")
+    .eq("match_id", matchId);
+  if (error) throw error;
+  const rows = data || [];
+  const total = rows.length;
+  const scoreCounts = {};       // "2-1" -> n
+  let homeWin = 0, draw = 0, awayWin = 0;
+  for (const r of rows) {
+    const key = `${r.home}-${r.away}`;
+    scoreCounts[key] = (scoreCounts[key] || 0) + 1;
+    if (r.home > r.away) homeWin++;
+    else if (r.home < r.away) awayWin++;
+    else draw++;
+  }
+  // top scorelines, most common first
+  const topScores = Object.entries(scoreCounts)
+    .map(([score, n]) => ({ score, n }))
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 4);
+  return { total, homeWin, draw, awayWin, topScores };
 }

@@ -2,11 +2,12 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   NOW, factOf, flag, FIXTURES,
   SEEDED_RESULTS, scoreMatch, fmtKick, dayKey, countdown,
+  STAGE_LABEL, STAGE_ORDER, isKnockout, normalizeDbFixture,
 } from "./data.js";
 import {
   signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange,
   amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult,
-  requestPasswordReset, updatePassword,
+  requestPasswordReset, updatePassword, getFixtures, getPredictionStats,
 } from "./db.js";
 import { supabaseConfigured } from "./supabase.js";
 
@@ -16,7 +17,8 @@ export default function App() {
   const [isOrganizer, setIsOrganizer] = useState(false);
   const [players, setPlayers] = useState([]);      // [{id,name}]
   const [predictions, setPredictions] = useState({}); // {uid:{mid:{h,a}}}
-  const [results, setResults] = useState({});      // {mid:{h,a}}
+  const [results, setResults] = useState({});      // {mid:{h,a,adv?}}
+  const [koFixtures, setKoFixtures] = useState([]); // dynamic knockout fixtures from DB
   const [view, setView] = useState("matches");
   const [loaded, setLoaded] = useState(false);
   const [tick, setTick] = useState(0);
@@ -28,8 +30,8 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [pl, pr, rs] = await Promise.all([getPlayers(), getPredictions(), getResults()]);
-      setPlayers(pl); setPredictions(pr); setResults(rs);
+      const [pl, pr, rs, fx] = await Promise.all([getPlayers(), getPredictions(), getResults(), getFixtures()]);
+      setPlayers(pl); setPredictions(pr); setResults(rs); setKoFixtures(fx);
     } catch (e) { console.error("refresh failed", e); }
   }, []);
 
@@ -90,18 +92,22 @@ export default function App() {
 
   /* derived */
   const effectiveResults = useMemo(() => ({ ...SEEDED_RESULTS, ...results }), [results]);
-  const enriched = useMemo(() => FIXTURES.map((f) => {
+  const allFixtures = useMemo(
+    () => [...FIXTURES, ...koFixtures.map(normalizeDbFixture)].sort((a, b) => a.kickoff - b.kickoff),
+    [koFixtures]
+  );
+  const enriched = useMemo(() => allFixtures.map((f) => {
     const r = effectiveResults[f.id];
     const settled = r && r.h !== "" && r.a !== "" && r.h != null && r.a != null;
     const kickedOff = NOW >= f.kickoff;
     const msToKick = f.kickoff - NOW;
     const WINDOW = 24 * 3.6e6; // predictions open 24h before kickoff
-    // Open if kickoff is within the next 24h and hasn't started / settled.
     const open = msToKick > 0 && msToKick <= WINDOW && !settled;
-    const future = msToKick > WINDOW;          // more than 24h away — not yet open
+    const future = msToKick > WINDOW;
     const locked = !open;
-    return { ...f, settled, kickedOff, future, open, locked, result: settled ? r : null };
-  }), [effectiveResults, tick]);
+    const ko = isKnockout(f.stage);
+    return { ...f, ko, settled, kickedOff, future, open, locked, result: settled ? r : null };
+  }), [allFixtures, effectiveResults, tick]);
 
   const upcoming = useMemo(() => enriched.filter((f) => f.open), [enriched]);
   const futureLocked = useMemo(() => enriched.filter((f) => f.future && !f.settled), [enriched]);
@@ -116,7 +122,7 @@ export default function App() {
         const has = pred && pred.h !== "" && pred.a !== "" && pred.h != null && pred.a != null;
         if (has) made++;
         if (m.settled && has) {
-          const s = scoreMatch(pred, m.result);
+          const s = scoreMatch(pred, m.result, { knockout: m.ko });
           total += s.points; scored++; if (s.exact) exact++;
         }
       });
@@ -357,6 +363,11 @@ function TopBar({ me, myRank, myPts, total, signOut, adminMode, setAdminMode, is
   );
 }
 
+// Match tag: "Group H" for group matches, the round name for knockouts.
+function tagOf(m) {
+  return m.ko ? (STAGE_LABEL[m.stage] || m.stage) : `Group ${m.group}`;
+}
+
 function FunFact({ home, away, seed }) {
   // deterministically show one of the two teams' facts so it's stable per match
   const pickHome = (seed.charCodeAt(seed.length - 1) % 2) === 0;
@@ -377,7 +388,7 @@ function PredictCard({ m, pred, setPred, locked }) {
   return (
     <div style={{ ...S.mCard, ...(has ? S.mCardDone : {}), borderLeft: `3px solid ${m.accent}` }}>
       <div style={S.mTop}>
-        <span style={S.grpTag}>Group {m.group}</span>
+        <span style={S.grpTag}>{tagOf(m)}</span>
         <span style={{ ...S.kick, color: soon ? V.red : V.sub }}>{countdown(ms)}</span>
       </div>
       <div style={S.venueRow}>
@@ -434,7 +445,7 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred })
             const has = hasPick(m); const p = myPreds[m.id];
             return (
               <div key={m.id} style={{ ...S.mCard, opacity: 0.86, borderLeft: `3px solid ${m.accent}` }}>
-                <div style={S.mTop}><span style={S.grpTag}>Group {m.group}</span><span style={{ ...S.kick, color: V.live }}>● live / pending</span></div>
+                <div style={S.mTop}><span style={S.grpTag}>{tagOf(m)}</span><span style={{ ...S.kick, color: V.live }}>● live / pending</span></div>
                 <div style={S.venueRow}><span style={{ ...S.venueDot, background: m.accent }} /><span style={S.venueText}>{m.city}{m.country ? `, ${m.country}` : ""}</span></div>
                 <div style={S.liveTeams}>
                   <span>{flag(m.home)} {m.home}</span><span style={{ color: V.sub }}>vs</span><span>{m.away} {flag(m.away)}</span>
@@ -468,7 +479,7 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred })
               <div style={S.dayLabel}>{day.k}</div>
               {day.items.map((m) => (
                 <div key={m.id} style={{ ...S.previewCard, borderLeft: `3px solid ${m.accent}` }}>
-                  <span style={S.grpTag}>Group {m.group}</span>
+                  <span style={S.grpTag}>{tagOf(m)}</span>
                   <span style={S.previewTeams}>{flag(m.home)} {m.home} <span style={{ color: V.sub }}>v</span> {m.away} {flag(m.away)}</span>
                   <span style={S.previewTime}>{m.city} · {m.kickoff.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
                 </div>
@@ -502,12 +513,12 @@ function ResultsView({ finished, me, predictions }) {
             {day.items.map((m) => {
               const pred = mine[m.id];
               const had = pred && pred.h !== "" && pred.a !== "" && pred.h != null && pred.a != null;
-              const sc = had ? scoreMatch(pred, m.result) : null;
+              const sc = had ? scoreMatch(pred, m.result, { knockout: m.ko }) : null;
               const hw = m.result.h > m.result.a, aw = m.result.a > m.result.h;
               return (
                 <div key={m.id} style={{ ...S.resCard, borderLeft: `3px solid ${m.accent}` }}>
                   <div style={S.resTop}>
-                    <span style={S.grpTag}>Group {m.group}</span>
+                    <span style={S.grpTag}>{tagOf(m)}</span>
                     {sc != null && (
                       <span style={{ ...S.resPts, color: sc.points >= 10 ? V.good : sc.points > 0 ? V.gold : V.sub }}>
                         {sc.exact ? "✓ " : ""}+{sc.points} pts
@@ -527,12 +538,69 @@ function ResultsView({ finished, me, predictions }) {
                   <div style={S.resYourPick}>
                     {had ? `Your pick: ${pred.h}-${pred.a}${sc ? ` · ${sc.breakdown}` : ""}` : "You didn't predict this one"}
                   </div>
+                  <MatchStats m={m} />
                 </div>
               );
             })}
           </div>
         ))}
       </section>
+    </div>
+  );
+}
+
+// "How everyone predicted" — tap to reveal the prediction distribution for a
+// settled match. Lazy-loads on first open so we don't query every card upfront.
+function MatchStats({ m }) {
+  const [open, setOpen] = useState(false);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const toggle = async () => {
+    const next = !open; setOpen(next);
+    if (next && !stats) {
+      setLoading(true);
+      try { setStats(await getPredictionStats(m.id)); }
+      catch (e) { console.error("stats failed", e); }
+      finally { setLoading(false); }
+    }
+  };
+  const pct = (n) => stats && stats.total ? Math.round((n / stats.total) * 100) : 0;
+  return (
+    <div style={S.statsWrap}>
+      <button className="ghost" style={S.statsToggle} onClick={toggle}>
+        {open ? "Hide" : "How everyone predicted"}
+      </button>
+      {open && (
+        <div style={S.statsBody}>
+          {loading && <div style={S.statsMuted}>Loading…</div>}
+          {!loading && stats && stats.total === 0 && <div style={S.statsMuted}>No predictions for this match.</div>}
+          {!loading && stats && stats.total > 0 && (
+            <>
+              <div style={S.statsRow}>
+                <span style={S.statsLbl}>{m.home} win</span>
+                <div style={S.barTrack}><div style={{ ...S.barFill, width: `${pct(stats.homeWin)}%` }} /></div>
+                <span style={S.statsPct}>{pct(stats.homeWin)}%</span>
+              </div>
+              <div style={S.statsRow}>
+                <span style={S.statsLbl}>Draw</span>
+                <div style={S.barTrack}><div style={{ ...S.barFill, width: `${pct(stats.draw)}%`, background: V.sub }} /></div>
+                <span style={S.statsPct}>{pct(stats.draw)}%</span>
+              </div>
+              <div style={S.statsRow}>
+                <span style={S.statsLbl}>{m.away} win</span>
+                <div style={S.barTrack}><div style={{ ...S.barFill, width: `${pct(stats.awayWin)}%`, background: V.violet }} /></div>
+                <span style={S.statsPct}>{pct(stats.awayWin)}%</span>
+              </div>
+              {stats.topScores.length > 0 && (
+                <div style={S.statsScores}>
+                  Most-picked: {stats.topScores.map((s) => `${s.score} (${s.n})`).join(" · ")}
+                </div>
+              )}
+              <div style={S.statsMuted}>{stats.total} prediction{stats.total === 1 ? "" : "s"}</div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -571,7 +639,7 @@ function MyPicksView({ enriched, me, predictions }) {
   const mine = predictions[me.id] || {};
   const rows = enriched
     .filter((m) => { const p = mine[m.id]; return p && p.h !== "" && p.a !== "" && p.h != null && p.a != null; })
-    .map((m) => ({ m, pred: mine[m.id], sc: m.settled ? scoreMatch(mine[m.id], m.result) : null }));
+    .map((m) => ({ m, pred: mine[m.id], sc: m.settled ? scoreMatch(mine[m.id], m.result, { knockout: m.ko }) : null }));
   const settledRows = rows.filter((r) => r.m.settled);
   const totalPts = settledRows.reduce((s, r) => s + r.sc.points, 0);
   return (
@@ -583,7 +651,7 @@ function MyPicksView({ enriched, me, predictions }) {
           <div key={m.id} style={S.pickRow}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={S.pickTeams}>{flag(m.home)} {m.home} <span style={{ color: V.sub }}>v</span> {m.away} {flag(m.away)}</div>
-              <div style={S.pickMeta}>Group {m.group} · {m.city} · {fmtKick(m.kickoff)}</div>
+              <div style={S.pickMeta}>{tagOf(m)} · {m.city} · {fmtKick(m.kickoff)}</div>
             </div>
             <div style={S.pickScores}>
               <div style={S.pickPred}>{pred.h}-{pred.a}</div>
@@ -620,7 +688,7 @@ function AdminView({ enriched, results, setResult }) {
             <div key={m.id} style={S.adminRow}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={S.pickTeams}>{flag(m.home)} {m.home} <span style={{ color: V.sub }}>v</span> {m.away} {flag(m.away)}</div>
-                <div style={S.pickMeta}>Group {m.group} · {m.city} · {fmtKick(m.kickoff)}</div>
+                <div style={S.pickMeta}>{tagOf(m)} · {m.city} · {fmtKick(m.kickoff)}</div>
               </div>
               <div style={S.scoreBox}>
                 <input className="num" inputMode="numeric" value={r.h ?? ""} onChange={(e) => setResult(m.id, "h", e.target.value)} placeholder="–" style={S.scoreInput} />
@@ -835,6 +903,16 @@ const S = {
   resTeam: { fontFamily: DISPLAY, fontSize: 15, lineHeight: 1.1, textTransform: "uppercase", letterSpacing: .4 },
   resScore: { fontFamily: NUM, fontWeight: 700, fontSize: 34, whiteSpace: "nowrap", color: "#fff", textShadow: "0 0 18px rgba(0,229,255,.35)" },
   resYourPick: { marginTop: 16, fontSize: 12, color: V.sub, borderTop: `1px solid ${V.strokeSoft}`, paddingTop: 12, fontWeight: 500 },
+  statsWrap: { marginTop: 12 },
+  statsToggle: { background: "none", border: `1px solid ${V.strokeSoft}`, color: V.cyan, fontSize: 11, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer", textTransform: "uppercase", letterSpacing: .5, fontFamily: DISPLAY, width: "100%" },
+  statsBody: { marginTop: 12, display: "flex", flexDirection: "column", gap: 8 },
+  statsRow: { display: "flex", alignItems: "center", gap: 10 },
+  statsLbl: { fontSize: 11, color: V.sub, fontWeight: 600, width: 92, flexShrink: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  barTrack: { flex: 1, height: 8, background: "rgba(255,255,255,.06)", borderRadius: 6, overflow: "hidden" },
+  barFill: { height: "100%", background: GRAD.electric, borderRadius: 6 },
+  statsPct: { fontSize: 12, fontWeight: 700, fontFamily: NUM, width: 38, textAlign: "right", flexShrink: 0 },
+  statsScores: { fontSize: 11, color: V.sub, marginTop: 4, fontWeight: 500 },
+  statsMuted: { fontSize: 11, color: V.sub, fontWeight: 500 },
 
   /* bottom nav */
   bottom: { position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 20, background: "rgba(5,6,11,.7)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderTop: `1px solid ${V.stroke}`, display: "flex", justifyContent: "space-around", padding: "10px 0 calc(10px + env(safe-area-inset-bottom))", maxWidth: 560, margin: "0 auto" },

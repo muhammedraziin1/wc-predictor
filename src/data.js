@@ -210,6 +210,28 @@ export const FIXTURES = RAW.map((m, i) => {
   };
 }).sort((a, b) => a.kickoff - b.kickoff);
 
+/* Knockout-round display labels and ordering. Dynamic KO fixtures arrive from
+   the DB (created by the sync as teams are known) carrying one of these stage
+   codes. */
+export const STAGE_LABEL = {
+  Group: "Group", R32: "Round of 32", R16: "Round of 16",
+  QF: "Quarter-final", SF: "Semi-final", "3rd": "Third place", Final: "Final",
+};
+export const STAGE_ORDER = { Group: 0, R32: 1, R16: 2, QF: 3, SF: 4, "3rd": 5, Final: 6 };
+export const isKnockout = (stage) => stage && stage !== "Group";
+
+// Normalize a fixtures-table row (from the DB) into the same shape the app uses
+// for hardcoded group fixtures.
+export function normalizeDbFixture(row) {
+  return {
+    id: row.id,
+    kickoff: new Date(row.kickoff),
+    home: row.home, away: row.away,
+    group: null, stage: row.stage || "R32",
+    city: row.city || "", country: row.country || "", accent: row.accent || "#00E5FF",
+  };
+}
+
 /* Verified final scores (90'+stoppage) for matches already completed,
    cross-checked against FIFA, CBS Sports and Yahoo as of Jun 15 2026.
    Organizer-entered results override these (merged in App). Add new lines
@@ -229,22 +251,35 @@ export const SEEDED_RESULTS = {
   G12: { h: 5, a: 1 }, // Sweden 5-1 Tunisia
 };
 
-/* ---------------- scoring ---------------- */
-export function scoreMatch(pred, actual) {
+/* ---------------- scoring ----------------
+   Group stage: three independent 5-pt criteria (result + home + away), max 15.
+   A correctly predicted draw earns the result point.
+   Knockouts: same three criteria, but "result" = who ADVANCED (so a penalty-
+   shootout winner counts as the correct result even when goals are level).
+   For KO matches, predictions and results may carry `adv` ("home"|"away"):
+   who the predictor/actual says went through. Home/away points still use the
+   post-ET goal count. */
+export function scoreMatch(pred, actual, opts = {}) {
   if (!pred || !actual) return { points: 0, exact: false, breakdown: "—" };
   const vals = [pred.h, pred.a, actual.h, actual.a];
   if (vals.some((v) => v === "" || v == null)) return { points: 0, exact: false, breakdown: "—" };
   const ph = +pred.h, pa = +pred.a, ah = +actual.h, aa = +actual.a;
-  // Three independent criteria, 5 points each (max 15):
-  //   correct result (win/draw/loss, draw counts) + home-score exact + away-score exact
+  const isKO = opts.knockout === true;
   let pts = 0; const parts = [];
-  if (Math.sign(ph - pa) === Math.sign(ah - aa)) { pts += 5; parts.push("Correct result"); }
+
+  if (isKO) {
+    // "result" = who advanced. Prefer explicit `adv`; fall back to goals if level.
+    const predAdv = pred.adv || (ph > pa ? "home" : ph < pa ? "away" : null);
+    const actAdv  = actual.adv || (ah > aa ? "home" : ah < aa ? "away" : null);
+    if (predAdv && actAdv && predAdv === actAdv) { pts += 5; parts.push("Right team through"); }
+  } else {
+    if (Math.sign(ph - pa) === Math.sign(ah - aa)) { pts += 5; parts.push("Correct result"); }
+  }
   if (ph === ah) { pts += 5; parts.push("Home score"); }
   if (pa === aa) { pts += 5; parts.push("Away score"); }
   const exact = ph === ah && pa === aa; // perfect call = 15, used for tiebreak
   return { points: pts, exact, breakdown: parts.join(" + ") || "No points" };
 }
-
 
 
 /* ---------------- formatting ---------------- */
