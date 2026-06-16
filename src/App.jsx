@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   NOW, factOf, flag, FIXTURES,
-  SEEDED_RESULTS, etDateKey, scoreMatch, fmtKick, dayKey, countdown,
+  SEEDED_RESULTS, scoreMatch, fmtKick, dayKey, countdown,
 } from "./data.js";
 import {
   signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange,
@@ -85,23 +85,22 @@ export default function App() {
 
   /* derived */
   const effectiveResults = useMemo(() => ({ ...SEEDED_RESULTS, ...results }), [results]);
-  const todayET = useMemo(() => etDateKey(NOW), [tick]);
   const enriched = useMemo(() => FIXTURES.map((f) => {
     const r = effectiveResults[f.id];
     const settled = r && r.h !== "" && r.a !== "" && r.h != null && r.a != null;
     const kickedOff = NOW >= f.kickoff;
-    const matchDayET = etDateKey(f.kickoff);
-    const sameDay = matchDayET === todayET;
-    const future = matchDayET > todayET;       // belongs to a later ET day
-    // Predictions open ONLY for same-day matches that haven't kicked off / settled.
-    const open = sameDay && !kickedOff && !settled;
+    const msToKick = f.kickoff - NOW;
+    const WINDOW = 24 * 3.6e6; // predictions open 24h before kickoff
+    // Open if kickoff is within the next 24h and hasn't started / settled.
+    const open = msToKick > 0 && msToKick <= WINDOW && !settled;
+    const future = msToKick > WINDOW;          // more than 24h away — not yet open
     const locked = !open;
-    return { ...f, settled, kickedOff, sameDay, future, open, locked, result: settled ? r : null, matchDayET };
-  }), [effectiveResults, todayET, tick]);
+    return { ...f, settled, kickedOff, future, open, locked, result: settled ? r : null };
+  }), [effectiveResults, tick]);
 
   const upcoming = useMemo(() => enriched.filter((f) => f.open), [enriched]);
   const futureLocked = useMemo(() => enriched.filter((f) => f.future && !f.settled), [enriched]);
-  const live = useMemo(() => enriched.filter((f) => f.sameDay && f.kickedOff && !f.settled), [enriched]);
+  const live = useMemo(() => enriched.filter((f) => f.kickedOff && !f.settled), [enriched]);
   const finished = useMemo(() => enriched.filter((f) => f.settled).reverse(), [enriched]);
 
   const leaderboard = useMemo(() => {
@@ -136,7 +135,7 @@ export default function App() {
         adminMode={adminMode} setAdminMode={setAdminMode} isOrganizer={isOrganizer} />
       <main style={S.main}>
         {view === "matches" && (
-          <MatchesView upcoming={upcoming} live={live} futureLocked={futureLocked} todayET={todayET}
+          <MatchesView upcoming={upcoming} live={live} futureLocked={futureLocked}
             me={me} predictions={predictions} setPred={setPred} />
         )}
         {view === "leaderboard" && <LeaderboardView leaderboard={leaderboard} me={me} />}
@@ -341,13 +340,10 @@ function PredictCard({ m, pred, setPred, locked }) {
   );
 }
 
-function MatchesView({ upcoming, live, futureLocked, todayET, me, predictions, setPred }) {
+function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred }) {
   const myPreds = predictions[me.id] || {};
   const hasPick = (m) => { const p = myPreds[m.id]; return p && p.h !== "" && p.a !== "" && p.h != null && p.a != null; };
   const unpicked = upcoming.filter((m) => !hasPick(m)).length;
-
-  // today's ET date, human-readable, for the header
-  const todayLabel = new Date(`${todayET}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
   // group the next locked future matches by day (show just the next day or two)
   const futureByDay = [];
@@ -382,12 +378,12 @@ function MatchesView({ upcoming, live, futureLocked, todayET, me, predictions, s
 
       <section>
         <div style={S.sectionHead}>
-          Today’s matches
+          Open to predict
           {unpicked > 0 && <span style={S.badge}>{unpicked} to predict</span>}
         </div>
-        <div style={S.dayLabel}>{todayLabel} · US Eastern</div>
+        <div style={S.dayLabel}>Matches kicking off within 24 hours</div>
         {upcoming.length === 0 && (
-          <div style={S.empty}>No more open matches today. Predictions open each day for that day’s fixtures.</div>
+          <div style={S.empty}>Nothing open right now. Each match opens 24 hours before kickoff.</div>
         )}
         {upcoming.map((m) => (
           <PredictCard key={m.id} m={m} pred={myPreds[m.id]} setPred={setPred} locked={false} />
