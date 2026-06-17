@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",          // new versions activate without a manual prompt
-      includeAssets: ["icon-192.png", "icon-512.png", "icon-maskable-512.png"],
+      includeAssets: ["icon-192.png", "icon-512.png", "icon-maskable-512.png", "screenshot-wide.png", "screenshot-mobile.png"],
       manifest: {
         id: "/",
         name: "Mozilor FanZone",
@@ -23,6 +23,10 @@ export default defineConfig({
           { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
           { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        ],
+        screenshots: [
+          { src: "/screenshot-wide.png", sizes: "1280x720", type: "image/png", form_factor: "wide", label: "Mozilor FanZone on desktop" },
+          { src: "/screenshot-mobile.png", sizes: "540x720", type: "image/png", form_factor: "narrow", label: "Mozilor FanZone on mobile" },
         ],
       },
       workbox: {
