@@ -264,57 +264,97 @@ function AuthScreen({ onAuthed, flash }) {
   return (
     <div style={S.signWrap}>
       <style>{CSS}</style>
-      <div style={S.signCard}>
-        <div style={S.signCrest}>⚽</div>
-        <div style={S.signEyebrow}>FIFA World Cup 2026</div>
-        <h1 style={S.signTitle}>Mozilor FanZone</h1>
+      <div style={S.signSplit}>
+        {/* LEFT: the form */}
+        <div style={S.signCard} className="signsplit-card">
+          <div style={S.signCrest}>⚽</div>
+          <div style={S.signEyebrow}>FIFA World Cup 2026</div>
+          <h1 style={S.signTitle}>Mozilor FanZone</h1>
 
-        <div style={S.authTabs}>
-          <button className="ghost" style={{ ...S.authTab, ...(tab === "login" ? S.authTabOn : {}) }}
-            onClick={() => { setTab("login"); setErr(""); setInfo(""); setName(""); }}>Log in</button>
-          <button className="ghost" style={{ ...S.authTab, ...(tab === "signup" ? S.authTabOn : {}) }}
-            onClick={() => { setTab("signup"); setErr(""); setInfo(""); }}>Sign up</button>
+          <div style={S.authTabs}>
+            <button className="ghost" style={{ ...S.authTab, ...(tab === "login" ? S.authTabOn : {}) }}
+              onClick={() => { setTab("login"); setErr(""); setInfo(""); setName(""); }}>Log in</button>
+            <button className="ghost" style={{ ...S.authTab, ...(tab === "signup" ? S.authTabOn : {}) }}
+              onClick={() => { setTab("signup"); setErr(""); setInfo(""); }}>Sign up</button>
+          </div>
+
+          {tab === "signup" && (
+            <>
+              <label style={S.fieldLabel}>Display name (shown on the leaderboard)</label>
+              <input autoFocus value={name} onChange={(e) => { setName(e.target.value); setErr(""); }}
+                placeholder="e.g. Raz" style={S.signInput} />
+            </>
+          )}
+
+          <label style={S.fieldLabel}>Email{tab === "signup" ? ` (@${ALLOWED_DOMAIN} only)` : ""}</label>
+          <input value={email} type="email" autoComplete="email"
+            onChange={(e) => { setEmail(e.target.value); setErr(""); }}
+            placeholder={tab === "signup" ? `you@${ALLOWED_DOMAIN}` : "you@example.com"} style={S.signInput} />
+
+          <label style={S.fieldLabel}>Password</label>
+          <input value={password} type="password"
+            autoComplete={tab === "signup" ? "new-password" : "current-password"}
+            onChange={(e) => { setPassword(e.target.value); setErr(""); }}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            placeholder={tab === "signup" ? "at least 6 characters" : "your password"}
+            style={S.signInput} />
+
+          {err && <div style={S.signErr}>{err}</div>}
+          {info && <div style={S.signInfo}>{info}</div>}
+
+          <button className="primary" style={{ ...S.signBtn, opacity: busy ? 0.6 : 1 }}
+            onClick={submit} disabled={busy}>
+            {busy ? "Please wait…" : tab === "signup" ? "Create account & play" : "Log in"}
+          </button>
+
+          {tab === "login" && (
+            <button className="ghost" style={S.forgotLink} onClick={forgot} disabled={busy}>
+              Forgot password?
+            </button>
+          )}
+
+          <p style={S.signFoot}>
+            Real accounts with email + password. Your predictions are tied to your
+            login, so only you can change them.
+          </p>
         </div>
 
-        {tab === "signup" && (
-          <>
-            <label style={S.fieldLabel}>Display name (shown on the leaderboard)</label>
-            <input autoFocus value={name} onChange={(e) => { setName(e.target.value); setErr(""); }}
-              placeholder="e.g. Raz" style={S.signInput} />
-          </>
-        )}
+        {/* RIGHT: rotating World Cup facts (desktop only) */}
+        <FactPanel />
+      </div>
+    </div>
+  );
+}
 
-        <label style={S.fieldLabel}>Email{tab === "signup" ? ` (@${ALLOWED_DOMAIN} only)` : ""}</label>
-        <input value={email} type="email" autoComplete="email"
-          onChange={(e) => { setEmail(e.target.value); setErr(""); }}
-          placeholder={tab === "signup" ? `you@${ALLOWED_DOMAIN}` : "you@example.com"} style={S.signInput} />
+const WC_FACTS = [
+  { stat: "1930", text: "The first FIFA World Cup was held in Uruguay, who won it on home soil." },
+  { stat: "48", text: "2026 is the first World Cup with 48 teams, expanded from 32." },
+  { stat: "3", text: "2026 is the first World Cup hosted by three nations: USA, Canada and Mexico." },
+  { stat: "5", text: "Brazil hold the record with five World Cup titles." },
+  { stat: "104", text: "A record 104 matches will be played across the 2026 tournament." },
+  { stat: "13", text: "Just Fontaine scored 13 goals at the 1958 World Cup, still a single-tournament record." },
+  { stat: "16", text: "Sixteen cities across North America will host matches in 2026." },
+  { stat: "1950", text: "The famous 'Maracanazo': Uruguay stunned Brazil in front of ~200,000 fans." },
+];
 
-        <label style={S.fieldLabel}>Password</label>
-        <input value={password} type="password"
-          autoComplete={tab === "signup" ? "new-password" : "current-password"}
-          onChange={(e) => { setPassword(e.target.value); setErr(""); }}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder={tab === "signup" ? "at least 6 characters" : "your password"}
-          style={S.signInput} />
-
-        {err && <div style={S.signErr}>{err}</div>}
-        {info && <div style={S.signInfo}>{info}</div>}
-
-        <button className="primary" style={{ ...S.signBtn, opacity: busy ? 0.6 : 1 }}
-          onClick={submit} disabled={busy}>
-          {busy ? "Please wait…" : tab === "signup" ? "Create account & play" : "Log in"}
-        </button>
-
-        {tab === "login" && (
-          <button className="ghost" style={S.forgotLink} onClick={forgot} disabled={busy}>
-            Forgot password?
-          </button>
-        )}
-
-        <p style={S.signFoot}>
-          Real accounts with email + password. Your predictions are tied to your
-          login, so only you can change them.
-        </p>
+function FactPanel() {
+  const [i, setI] = useState(() => Math.floor(Math.random() * WC_FACTS.length));
+  useEffect(() => {
+    const t = setInterval(() => setI((x) => (x + 1) % WC_FACTS.length), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const f = WC_FACTS[i];
+  return (
+    <div style={S.factPanel} className="factpanel">
+      <div style={S.factEyebrow}>Did you know?</div>
+      <div key={i} style={S.factCard} className="factfade">
+        <div style={S.factStat}>{f.stat}</div>
+        <div style={S.factText}>{f.text}</div>
+      </div>
+      <div style={S.factDots}>
+        {WC_FACTS.map((_, n) => (
+          <span key={n} style={{ ...S.factDot, ...(n === i ? S.factDotOn : {}) }} />
+        ))}
       </div>
     </div>
   );
@@ -934,6 +974,13 @@ const CSS = `
 .lbrow:hover{cursor:pointer;background:rgba(255,255,255,.09);}
 .navbtn:active{transform:scale(.9);}
 .menuitem:hover{background:rgba(255,255,255,.08);}
+/* Login: fade facts in, and collapse the split to a single card on mobile */
+.factfade{animation:factIn .5s ease;}
+@keyframes factIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+@media (max-width: 760px){
+  .factpanel{display:none !important;}
+  .signsplit-card{max-width:420px !important;border-radius:18px !important;}
+}
 ::-webkit-scrollbar{width:9px;height:9px;}
 ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:8px;}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
@@ -1015,7 +1062,16 @@ const S = {
 
   /* sign in */
   signWrap: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 20, background: BACKDROP, backgroundAttachment: "fixed", color: V.text, fontFamily: FONT },
-  signCard: { width: "100%", maxWidth: 390, ...GLASS, padding: 30, textAlign: "center" },
+  signSplit: { display: "flex", gap: 0, width: "100%", maxWidth: 880, borderRadius: 20, overflow: "hidden", boxShadow: "0 24px 80px rgba(0,0,0,.5)" },
+  signCard: { width: "100%", maxWidth: 420, flexShrink: 0, ...GLASS, borderRadius: 0, padding: 36, textAlign: "center" },
+  factPanel: { flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "36px 40px", background: "linear-gradient(150deg, rgba(0,229,255,.10), rgba(60,172,59,.10))", borderLeft: `1px solid ${V.stroke}`, position: "relative", overflow: "hidden" },
+  factEyebrow: { fontFamily: DISPLAY, fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: V.cyan, marginBottom: 18 },
+  factCard: { minHeight: 160 },
+  factStat: { fontFamily: NUM, fontWeight: 700, fontSize: 64, lineHeight: 1, background: GRAD.electric, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", marginBottom: 14 },
+  factText: { fontSize: 16, lineHeight: 1.5, color: V.text, maxWidth: 320 },
+  factDots: { display: "flex", gap: 7, marginTop: 28 },
+  factDot: { width: 7, height: 7, borderRadius: 4, background: "rgba(255,255,255,.2)", transition: "all .3s" },
+  factDotOn: { background: V.cyan, width: 20 },
   signCrest: { fontSize: 50, marginBottom: 4, filter: "drop-shadow(0 0 16px rgba(0,229,255,.6))" },
   signEyebrow: { background: GRAD.electric, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", fontSize: 12, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", fontFamily: DISPLAY },
   signTitle: { fontFamily: DISPLAY, fontSize: 38, fontWeight: 700, margin: "2px 0 8px", letterSpacing: 1, lineHeight: 1, textTransform: "uppercase", color: "#fff", textShadow: "0 0 30px rgba(0,229,255,.35)" },
@@ -1046,7 +1102,7 @@ const S = {
   rankPill: { display: "flex", alignItems: "center", gap: 4, background: V.glass, border: `1px solid ${V.stroke}`, borderRadius: 10, padding: "6px 12px", fontSize: 14, fontFamily: NUM, fontWeight: 700 },
   rankDot: { color: V.sub, margin: "0 2px" },
   gear: { background: V.glass, border: `1px solid ${V.stroke}`, color: V.text, borderRadius: 10, width: 36, height: 36, fontSize: 18, cursor: "pointer", lineHeight: 1 },
-  menu: { position: "absolute", top: 44, right: 0, ...GLASS, borderRadius: 12, padding: 6, minWidth: 210, zIndex: 30 },
+  menu: { position: "absolute", top: 44, right: 0, background: "rgba(12,15,26,.97)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)", border: "1px solid rgba(255,255,255,.16)", boxShadow: "0 16px 48px rgba(0,0,0,.6)", borderRadius: 12, padding: 6, minWidth: 210, zIndex: 30 },
   menuItem: { display: "block", width: "100%", textAlign: "left", background: "none", border: "none", color: V.text, padding: "10px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 500 },
 
   /* sections */

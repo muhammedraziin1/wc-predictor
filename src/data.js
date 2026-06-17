@@ -286,11 +286,13 @@ export function scoreMatch(pred, actual, opts = {}) {
 /* All match times are shown in IST (Asia/Kolkata), regardless of the viewer's
    device timezone, since the pool runs on IST rules. */
 const IST = "Asia/Kolkata";
+// Uppercase the am/pm that toLocaleString emits in en-IN.
+const up12 = (s) => s.replace(/\bam\b/i, "AM").replace(/\bpm\b/i, "PM");
 export const fmtKick = (d) =>
-  d.toLocaleString("en-IN", { timeZone: IST, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + " IST";
+  up12(d.toLocaleString("en-IN", { timeZone: IST, hour12: true, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })) + " IST";
 // Short IST time for compact display, e.g. "Thu, 18 Jun · 10:30 PM IST"
 export const fmtKickIST = (d) =>
-  d.toLocaleString("en-IN", { timeZone: IST, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) + " IST";
+  up12(d.toLocaleString("en-IN", { timeZone: IST, hour12: true, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })) + " IST";
 export const dayKey = (d) =>
   d.toLocaleDateString("en-IN", { timeZone: IST, weekday: "long", month: "short", day: "numeric" });
 
