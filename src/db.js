@@ -88,12 +88,14 @@ export async function getMe() {
 
 // If a user authenticated but has no profile yet (e.g. confirmed via email
 // link), create it. Returns { ok } | { error }.
+// Create the profile row if it doesn't exist yet. NEVER overwrites an existing
+// name — ignoreDuplicates means a conflict on id leaves the current row intact.
 export async function ensureProfile(name) {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.user) return { error: "Not signed in." };
   const { error } = await supabase
     .from("profiles")
-    .upsert({ id: session.user.id, name: name.trim() }, { onConflict: "id" });
+    .upsert({ id: session.user.id, name: name.trim() }, { onConflict: "id", ignoreDuplicates: true });
   if (error) {
     if (error.code === "23505") return { error: "That display name is taken." };
     return { error: error.message };
@@ -192,18 +194,6 @@ export async function getFixtures() {
     return [];
   }
   return data || [];
-}
-
-/* --------------------------- live scores --------------------------- */
-// In-play scores written by the sync (display only — never affects points).
-export async function getLiveScores() {
-  const { data, error } = await supabase
-    .from("live_scores")
-    .select("match_id, home, away, minute, status");
-  if (error) { console.warn("getLiveScores:", error.message); return {}; }
-  const out = {};
-  for (const r of data || []) out[r.match_id] = { h: r.home, a: r.away, minute: r.minute, status: r.status };
-  return out;
 }
 
 /* --------------------------- prediction stats (how everyone predicted) --------------------------- */
