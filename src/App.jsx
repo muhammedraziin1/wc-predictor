@@ -146,12 +146,15 @@ export default function App() {
   const myRank = me ? leaderboard.findIndex((r) => r.id === me.id) + 1 : 0;
   const myRow = me ? leaderboard.find((r) => r.id === me.id) : null;
 
+  // Hooks must run on every render in the same order — keep this ABOVE the
+  // early returns below, or React crashes when the guards change post-login.
+  const vp = useViewport();
+
   if (!supabaseConfigured) return <Splash text="⚠ Supabase not configured. Copy .env.example to .env and add your project URL and anon key, then restart the dev server." />;
   if (recovery) return <RecoveryScreen onDone={async () => { setRecovery(false); await loadSession(); }} flash={flash} />;
   if (!loaded) return <Splash text="Loading…" />;
   if (!me) return <AuthScreen onAuthed={loadSession} flash={flash} />;
 
-  const vp = useViewport();
   const showRail = vp.isWide && view === "matches"; // rail only on wide + matches tab
 
   const content = (
