@@ -295,6 +295,9 @@ export const fmtKickIST = (d) =>
   up12(d.toLocaleString("en-IN", { timeZone: IST, hour12: true, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })) + " IST";
 export const dayKey = (d) =>
   d.toLocaleDateString("en-IN", { timeZone: IST, weekday: "long", month: "short", day: "numeric" });
+// Time-only in IST, 12-hour, e.g. "9:30 PM IST". Used in compact preview rows.
+export const fmtTimeIST = (d) =>
+  up12(d.toLocaleString("en-IN", { timeZone: IST, hour12: true, hour: "numeric", minute: "2-digit" })) + " IST";
 
 /* Prediction lock: a match locks at the most recent 9 PM IST at or before its
    kickoff. This groups a late-night-through-morning slate (IST) under one

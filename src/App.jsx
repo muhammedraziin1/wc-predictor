@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   NOW, factOf, flag, FIXTURES,
-  SEEDED_RESULTS, scoreMatch, fmtKick, fmtKickIST, dayKey, countdown, lockTime, openTime,
+  SEEDED_RESULTS, scoreMatch, fmtKick, fmtKickIST, fmtTimeIST, dayKey, countdown, lockTime, openTime,
   STAGE_LABEL, STAGE_ORDER, isKnockout, normalizeDbFixture,
 } from "./data.js";
 import {
@@ -641,7 +641,7 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred, d
                 <div key={m.id} style={{ ...S.previewCard, borderLeft: `3px solid ${m.accent}` }}>
                   <span style={S.grpTag}>{tagOf(m)}</span>
                   <span style={S.previewTeams}>{flag(m.home)} {m.home} <span style={{ color: V.sub }}>v</span> {m.away} {flag(m.away)}</span>
-                  <span style={S.previewTime}>{m.city} · {m.kickoff.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
+                  <span style={S.previewTime}>{m.city} · {fmtTimeIST(m.kickoff)}</span>
                 </div>
               ))}
             </div>
