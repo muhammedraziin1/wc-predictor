@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   NOW, factOf, flag, FIXTURES,
-  SEEDED_RESULTS, scoreMatch, fmtKick, dayKey, countdown,
+  SEEDED_RESULTS, scoreMatch, fmtKick, fmtKickIST, dayKey, countdown, lockTime,
   STAGE_LABEL, STAGE_ORDER, isKnockout, normalizeDbFixture,
 } from "./data.js";
 import {
@@ -112,13 +112,18 @@ export default function App() {
     const r = effectiveResults[f.id];
     const settled = r && r.h !== "" && r.a !== "" && r.h != null && r.a != null;
     const kickedOff = NOW >= f.kickoff;
+    const lock = lockTime(f.kickoff);          // 9 PM IST cutoff for this match
+    const msToLock = lock - NOW;
     const msToKick = f.kickoff - NOW;
-    const WINDOW = 24 * 3.6e6; // predictions open 24h before kickoff
-    const open = msToKick > 0 && msToKick <= WINDOW && !settled;
-    const future = msToKick > WINDOW;
+    // Open to predict until the 9PM lock passes. Show as "future" (not yet open)
+    // if the lock is still more than 48h away, so the whole tournament doesn't
+    // appear open at once.
+    const OPEN_LEAD = 48 * 3.6e6;
+    const open = msToLock > 0 && msToLock <= OPEN_LEAD && !settled;
+    const future = msToLock > OPEN_LEAD;
     const locked = !open;
     const ko = isKnockout(f.stage);
-    return { ...f, ko, settled, kickedOff, future, open, locked, result: settled ? r : null };
+    return { ...f, ko, lock, msToLock, settled, kickedOff, future, open, locked, result: settled ? r : null };
   }), [allFixtures, effectiveResults, tick]);
 
   const upcoming = useMemo(() => enriched.filter((f) => f.open), [enriched]);
@@ -494,13 +499,13 @@ function FunFact({ home, away, seed }) {
 function PredictCard({ m, pred, setPred, locked }) {
   const has = pred && pred.h !== "" && pred.a !== "" && pred.h != null && pred.a != null;
   const winner = has ? (+pred.h > +pred.a ? "home" : +pred.h < +pred.a ? "away" : "draw") : null;
-  const ms = m.kickoff - NOW;
-  const soon = ms > 0 && ms < 3.6e6 * 3;
+  const lockMs = m.lock - NOW;
+  const soon = lockMs > 0 && lockMs < 3.6e6 * 3; // predictions close within 3h
   return (
     <div style={{ ...S.mCard, ...(has ? S.mCardDone : {}), borderLeft: `3px solid ${m.accent}` }}>
       <div style={S.mTop}>
         <span style={S.grpTag}>{tagOf(m)}</span>
-        <span style={{ ...S.kick, color: soon ? V.red : V.sub }}>{countdown(ms)}</span>
+        <span style={{ ...S.kick, color: soon ? V.red : V.sub }}>{fmtKickIST(m.kickoff)}</span>
       </div>
       <div style={S.venueRow}>
         <span style={{ ...S.venueDot, background: m.accent }} />
@@ -526,8 +531,9 @@ function PredictCard({ m, pred, setPred, locked }) {
         </div>
       </div>
 
-      {has && !locked && <div style={S.savedTag}>✓ Pick saved · {pred.h}-{pred.a} · change anytime before kickoff</div>}
-      {locked && <div style={S.lockedTag}>🔒 Locked at kickoff</div>}
+      {has && !locked && <div style={S.savedTag}>✓ Pick saved · {pred.h}-{pred.a} · edit until {fmtKickIST(m.lock)}</div>}
+      {!has && !locked && <div style={S.lockedTag}>Predictions close {fmtKickIST(m.lock)}</div>}
+      {locked && <div style={S.lockedTag}>🔒 Predictions closed</div>}
     </div>
   );
 }

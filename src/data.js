@@ -283,9 +283,30 @@ export function scoreMatch(pred, actual, opts = {}) {
 
 
 /* ---------------- formatting ---------------- */
+/* All match times are shown in IST (Asia/Kolkata), regardless of the viewer's
+   device timezone, since the pool runs on IST rules. */
+const IST = "Asia/Kolkata";
 export const fmtKick = (d) =>
-  d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-export const dayKey = (d) => d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  d.toLocaleString("en-IN", { timeZone: IST, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + " IST";
+// Short IST time for compact display, e.g. "Thu, 18 Jun · 10:30 PM IST"
+export const fmtKickIST = (d) =>
+  d.toLocaleString("en-IN", { timeZone: IST, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) + " IST";
+export const dayKey = (d) =>
+  d.toLocaleDateString("en-IN", { timeZone: IST, weekday: "long", month: "short", day: "numeric" });
+
+/* Prediction lock: a match locks at the most recent 9 PM IST at or before its
+   kickoff. This groups a late-night-through-morning slate (IST) under one
+   cutoff the evening before, and guarantees the lock is always before kickoff
+   (no watch-then-predict loophole). */
+const IST_OFFSET_MS = 5.5 * 3600 * 1000;
+export function lockTime(kickoff) {
+  const ist = new Date(kickoff.getTime() + IST_OFFSET_MS); // IST wall-clock in UTC fields
+  const y = ist.getUTCFullYear(), m = ist.getUTCMonth(), d = ist.getUTCDate();
+  let lock = Date.UTC(y, m, d, 21, 0, 0);        // 9 PM IST on the kickoff's IST day
+  if (ist.getTime() < lock) lock = Date.UTC(y, m, d - 1, 21, 0, 0); // before 9PM → previous evening
+  return new Date(lock - IST_OFFSET_MS);          // back to real UTC
+}
+
 export function countdown(ms) {
   if (ms <= 0) return "kicked off";
   const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
