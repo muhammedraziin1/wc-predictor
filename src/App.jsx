@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   NOW, factOf, flag, FIXTURES,
-  SEEDED_RESULTS, scoreMatch, fmtKick, fmtKickIST, dayKey, countdown, lockTime,
+  SEEDED_RESULTS, scoreMatch, fmtKick, fmtKickIST, dayKey, countdown, lockTime, openTime,
   STAGE_LABEL, STAGE_ORDER, isKnockout, normalizeDbFixture,
 } from "./data.js";
 import {
@@ -113,17 +113,15 @@ export default function App() {
     const settled = r && r.h !== "" && r.a !== "" && r.h != null && r.a != null;
     const kickedOff = NOW >= f.kickoff;
     const lock = lockTime(f.kickoff);          // 9 PM IST cutoff for this match
+    const opens = openTime(f.kickoff);         // 12 AM IST on the lock's day
     const msToLock = lock - NOW;
-    const msToKick = f.kickoff - NOW;
-    // Open to predict until the 9PM lock passes. Show as "future" (not yet open)
-    // if the lock is still more than 48h away, so the whole tournament doesn't
-    // appear open at once.
-    const OPEN_LEAD = 48 * 3.6e6;
-    const open = msToLock > 0 && msToLock <= OPEN_LEAD && !settled;
-    const future = msToLock > OPEN_LEAD;
+    // Open from midnight IST of the lock's day until the 9 PM IST lock. Before
+    // that midnight it's "future" (not yet open); after the lock it's locked.
+    const open = NOW >= opens && msToLock > 0 && !settled;
+    const future = NOW < opens && !settled;
     const locked = !open;
     const ko = isKnockout(f.stage);
-    return { ...f, ko, lock, msToLock, settled, kickedOff, future, open, locked, result: settled ? r : null };
+    return { ...f, ko, lock, opens, msToLock, settled, kickedOff, future, open, locked, result: settled ? r : null };
   }), [allFixtures, effectiveResults, tick]);
 
   const upcoming = useMemo(() => enriched.filter((f) => f.open), [enriched]);

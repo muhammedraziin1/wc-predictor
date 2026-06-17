@@ -307,6 +307,12 @@ export function lockTime(kickoff) {
   return new Date(lock - IST_OFFSET_MS);          // back to real UTC
 }
 
+// A match opens for prediction at 12:00 AM IST on the day its predictions close
+// (the same IST day as the 9 PM lock). Midnight IST = the 9 PM lock minus 21h.
+export function openTime(kickoff) {
+  return new Date(lockTime(kickoff).getTime() - 21 * 3600 * 1000);
+}
+
 export function countdown(ms) {
   if (ms <= 0) return "kicked off";
   const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
