@@ -134,16 +134,31 @@ export async function getPlayers() {
 }
 
 /* --------------------------- predictions --------------------------- */
+// A user can only read their OWN predictions (enforced by RLS). This returns
+// just the caller's picks, keyed the same way the app expects.
 export async function getPredictions() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) return {};
   const { data, error } = await supabase
     .from("predictions")
-    .select("user_id, match_id, home, away");
+    .select("user_id, match_id, home, away")
+    .eq("user_id", session.user.id);
   if (error) throw error;
   const out = {};
   for (const row of data || []) {
     (out[row.user_id] ||= {})[row.match_id] = { h: row.home, a: row.away };
   }
   return out;
+}
+
+// Server-computed leaderboard (totals only, never raw picks). See
+// secure_predictions.sql — this is what keeps other players' predictions private.
+export async function getLeaderboard() {
+  const { data, error } = await supabase.rpc("leaderboard");
+  if (error) throw error;
+  return (data || []).map((r) => ({
+    id: r.user_id, name: r.name, total: r.total, exact: r.exact, made: r.made,
+  }));
 }
 
 // Upsert the logged-in user's prediction. RLS guarantees user_id = auth.uid().
@@ -197,29 +212,19 @@ export async function getFixtures() {
 }
 
 /* --------------------------- prediction stats (how everyone predicted) --------------------------- */
-// "How everyone predicted" a given match: distribution of scorelines + result
-// split. Only meaningful to reveal once the match is locked (caller enforces).
+// AGGREGATE-ONLY, server-side. The RPC returns nothing until the match's 9 PM
+// IST lock has passed, and never exposes individual picks. See secure_predictions.sql.
 export async function getPredictionStats(matchId) {
-  const { data, error } = await supabase
-    .from("predictions")
-    .select("home, away")
-    .eq("match_id", matchId);
+  const { data, error } = await supabase.rpc("prediction_stats", { p_match_id: matchId });
   if (error) throw error;
   const rows = data || [];
-  const total = rows.length;
-  const scoreCounts = {};       // "2-1" -> n
+  if (rows.length === 0) return { total: 0, homeWin: 0, draw: 0, awayWin: 0, topScores: [] };
+  const total = rows[0].total;
   let homeWin = 0, draw = 0, awayWin = 0;
+  const topScores = [];
   for (const r of rows) {
-    const key = `${r.home}-${r.away}`;
-    scoreCounts[key] = (scoreCounts[key] || 0) + 1;
-    if (r.home > r.away) homeWin++;
-    else if (r.home < r.away) awayWin++;
-    else draw++;
+    homeWin += r.home_win; draw += r.draw; awayWin += r.away_win;
+    topScores.push({ score: r.scoreline, n: r.n });
   }
-  // top scorelines, most common first
-  const topScores = Object.entries(scoreCounts)
-    .map(([score, n]) => ({ score, n }))
-    .sort((a, b) => b.n - a.n)
-    .slice(0, 4);
-  return { total, homeWin, draw, awayWin, topScores };
+  return { total, homeWin, draw, awayWin, topScores: topScores.slice(0, 4) };
 }

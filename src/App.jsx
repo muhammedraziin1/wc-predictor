@@ -6,7 +6,7 @@ import {
 } from "./data.js";
 import {
   signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange,
-  amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult,
+  amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult, getLeaderboard,
   requestPasswordReset, updatePassword, getFixtures, getPredictionStats, isAllowedEmail, ALLOWED_DOMAIN,
 } from "./db.js";
 import { supabaseConfigured } from "./supabase.js";
@@ -28,6 +28,7 @@ export default function App() {
   const [me, setMe] = useState(null);              // {id,name,email}
   const [isOrganizer, setIsOrganizer] = useState(false);
   const [players, setPlayers] = useState([]);      // [{id,name}]
+  const [leaderboard, setLeaderboard] = useState([]); // server-computed: [{id,name,total,exact,made}]
   const [predictions, setPredictions] = useState({}); // {uid:{mid:{h,a}}}
   const [results, setResults] = useState({});      // {mid:{h,a,adv?}}
   const [koFixtures, setKoFixtures] = useState([]); // dynamic knockout fixtures from DB
@@ -42,8 +43,8 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [pl, pr, rs, fx] = await Promise.all([getPlayers(), getPredictions(), getResults(), getFixtures()]);
-      setPlayers(pl); setPredictions(pr); setResults(rs); setKoFixtures(fx);
+      const [pl, pr, rs, fx, lb] = await Promise.all([getPlayers(), getPredictions(), getResults(), getFixtures(), getLeaderboard()]);
+      setPlayers(pl); setPredictions(pr); setResults(rs); setKoFixtures(fx); setLeaderboard(lb);
     } catch (e) { console.error("refresh failed", e); }
   }, []);
 
@@ -129,23 +130,8 @@ export default function App() {
   const live = useMemo(() => enriched.filter((f) => f.kickedOff && !f.settled), [enriched]);
   const finished = useMemo(() => enriched.filter((f) => f.settled).reverse(), [enriched]);
 
-  const leaderboard = useMemo(() => {
-    const rows = players.map((p) => {
-      let total = 0, exact = 0, scored = 0, made = 0;
-      enriched.forEach((m) => {
-        const pred = predictions[p.id]?.[m.id];
-        const has = pred && pred.h !== "" && pred.a !== "" && pred.h != null && pred.a != null;
-        if (has) made++;
-        if (m.settled && has) {
-          const s = scoreMatch(pred, m.result, { knockout: m.ko });
-          total += s.points; scored++; if (s.exact) exact++;
-        }
-      });
-      return { ...p, total, exact, scored, made };
-    });
-    return rows.sort((a, b) => b.total - a.total || b.exact - a.exact || a.name.localeCompare(b.name));
-  }, [players, predictions, enriched]);
-
+  // leaderboard is server-computed (see getLeaderboard / secure_predictions.sql);
+  // raw predictions of other users never reach the client.
   const myRank = me ? leaderboard.findIndex((r) => r.id === me.id) + 1 : 0;
   const myRow = me ? leaderboard.find((r) => r.id === me.id) : null;
 
