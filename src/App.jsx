@@ -7,7 +7,7 @@ import {
 import {
   signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange,
   amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult,
-  requestPasswordReset, updatePassword, getFixtures, getPredictionStats, isAllowedEmail, ALLOWED_DOMAIN,
+  requestPasswordReset, updatePassword, getFixtures, getPredictionStats, isAllowedEmail, ALLOWED_DOMAIN, getLiveScores,
 } from "./db.js";
 import { supabaseConfigured } from "./supabase.js";
 
@@ -31,6 +31,7 @@ export default function App() {
   const [predictions, setPredictions] = useState({}); // {uid:{mid:{h,a}}}
   const [results, setResults] = useState({});      // {mid:{h,a,adv?}}
   const [koFixtures, setKoFixtures] = useState([]); // dynamic knockout fixtures from DB
+  const [liveScores, setLiveScores] = useState({}); // in-play scores (display only)
   const [view, setView] = useState("matches");
   const [loaded, setLoaded] = useState(false);
   const [tick, setTick] = useState(0);
@@ -42,9 +43,14 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [pl, pr, rs, fx] = await Promise.all([getPlayers(), getPredictions(), getResults(), getFixtures()]);
-      setPlayers(pl); setPredictions(pr); setResults(rs); setKoFixtures(fx);
+      const [pl, pr, rs, fx, ls] = await Promise.all([getPlayers(), getPredictions(), getResults(), getFixtures(), getLiveScores()]);
+      setPlayers(pl); setPredictions(pr); setResults(rs); setKoFixtures(fx); setLiveScores(ls);
     } catch (e) { console.error("refresh failed", e); }
+  }, []);
+
+  // Poll live scores every 60s while any match is in progress.
+  const refreshLive = useCallback(async () => {
+    try { setLiveScores(await getLiveScores()); } catch (e) { console.error("live refresh failed", e); }
   }, []);
 
   const loadSession = useCallback(async () => {
@@ -126,6 +132,15 @@ export default function App() {
   const live = useMemo(() => enriched.filter((f) => f.kickedOff && !f.settled), [enriched]);
   const finished = useMemo(() => enriched.filter((f) => f.settled).reverse(), [enriched]);
 
+  // Poll live scores every 60s, but only while a match is actually in progress.
+  const hasLive = live.length > 0;
+  useEffect(() => {
+    if (!hasLive) return;
+    refreshLive(); // immediate
+    const t = setInterval(refreshLive, 60000);
+    return () => clearInterval(t);
+  }, [hasLive, refreshLive]);
+
   const leaderboard = useMemo(() => {
     const rows = players.map((p) => {
       let total = 0, exact = 0, scored = 0, made = 0;
@@ -161,7 +176,7 @@ export default function App() {
     <>
       {view === "matches" && (
         <MatchesView upcoming={upcoming} live={live} futureLocked={futureLocked}
-          me={me} predictions={predictions} setPred={setPred} desktop={vp.isDesktop} />
+          me={me} predictions={predictions} setPred={setPred} desktop={vp.isDesktop} liveScores={liveScores} />
       )}
       {view === "leaderboard" && <LeaderboardView leaderboard={leaderboard} me={me} fullPage={vp.isDesktop} />}
       {view === "results" && (
@@ -532,7 +547,7 @@ function PredictCard({ m, pred, setPred, locked }) {
   );
 }
 
-function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred, desktop }) {
+function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred, desktop, liveScores }) {
   const myPreds = predictions[me.id] || {};
   const hasPick = (m) => { const p = myPreds[m.id]; return p && p.h !== "" && p.a !== "" && p.h != null && p.a != null; };
   const unpicked = upcoming.filter((m) => !hasPick(m)).length;
@@ -556,14 +571,34 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred, d
           <div style={gridStyle}>
           {live.map((m) => {
             const has = hasPick(m); const p = myPreds[m.id];
+            const ls = liveScores?.[m.id];
+            const showLive = ls && (ls.status === "IN_PLAY" || ls.status === "PAUSED");
+            const minuteLabel = ls?.minute === "HT" ? "HALF TIME" : ls?.minute && ls.minute !== "LIVE" ? `${ls.minute}'` : "LIVE";
             return (
-              <div key={m.id} style={{ ...S.mCard, opacity: 0.86, borderLeft: `3px solid ${m.accent}` }}>
-                <div style={S.mTop}><span style={S.grpTag}>{tagOf(m)}</span><span style={{ ...S.kick, color: V.live }}>● live / pending</span></div>
-                <div style={S.venueRow}><span style={{ ...S.venueDot, background: m.accent }} /><span style={S.venueText}>{m.city}{m.country ? `, ${m.country}` : ""}</span></div>
-                <div style={S.liveTeams}>
-                  <span>{flag(m.home)} {m.home}</span><span style={{ color: V.sub }}>vs</span><span>{m.away} {flag(m.away)}</span>
+              <div key={m.id} style={{ ...S.mCard, borderLeft: `3px solid ${m.accent}` }}>
+                <div style={S.mTop}>
+                  <span style={S.grpTag}>{tagOf(m)}</span>
+                  <span style={{ ...S.kick, color: V.live, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={S.liveDot} /> {showLive ? minuteLabel : "live / pending"}
+                  </span>
                 </div>
-                <div style={S.lockedTag}>{has ? `Your pick: ${p.h}-${p.a} · scores once result is in` : "No pick — locked"}</div>
+                <div style={S.venueRow}><span style={{ ...S.venueDot, background: m.accent }} /><span style={S.venueText}>{m.city}{m.country ? `, ${m.country}` : ""}</span></div>
+                {showLive ? (
+                  <div style={S.mTeams}>
+                    <div style={S.teamCell}><span style={S.flag}>{flag(m.home)}</span><span style={S.teamLbl}>{m.home}</span></div>
+                    <div style={S.scoreBox}>
+                      <div style={{ ...S.scoreInput, display: "grid", placeItems: "center", color: V.live }}>{ls.h}</div>
+                      <span style={{ ...S.colon, color: V.live }}>:</span>
+                      <div style={{ ...S.scoreInput, display: "grid", placeItems: "center", color: V.live }}>{ls.a}</div>
+                    </div>
+                    <div style={S.teamCell}><span style={S.flag}>{flag(m.away)}</span><span style={S.teamLbl}>{m.away}</span></div>
+                  </div>
+                ) : (
+                  <div style={S.liveTeams}>
+                    <span>{flag(m.home)} {m.home}</span><span style={{ color: V.sub }}>vs</span><span>{m.away} {flag(m.away)}</span>
+                  </div>
+                )}
+                <div style={S.lockedTag}>{has ? `Your pick: ${p.h}-${p.a} · scores from the final result` : "No pick — locked"}</div>
               </div>
             );
           })}
@@ -972,8 +1007,8 @@ const S = {
   sbTitle: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 18, letterSpacing: 1, textTransform: "uppercase", lineHeight: 1, color: "#fff" },
   sbSub: { color: V.sub, fontSize: 11, marginTop: 2 },
   sbNav: { display: "flex", flexDirection: "column", gap: 4, marginTop: 4 },
-  sbItem: { display: "flex", alignItems: "center", gap: 13, padding: "13px 14px", borderRadius: 12, color: V.sub, fontFamily: DISPLAY, fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: .6, cursor: "pointer", border: "1px solid transparent", background: "none", width: "100%", textAlign: "left" },
-  sbItemOn: { background: GRAD.electricSoft, borderColor: "rgba(0,229,255,.35)", color: "#fff", boxShadow: "0 0 20px rgba(0,229,255,.12)" },
+  sbItem: { display: "flex", alignItems: "center", gap: 13, padding: "13px 14px", borderRadius: 12, color: V.sub, fontFamily: DISPLAY, fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: .6, cursor: "pointer", border: "1px solid transparent", boxShadow: "none", background: "none", width: "100%", textAlign: "left" },
+  sbItemOn: { background: GRAD.electricSoft, border: "1px solid rgba(0,229,255,.35)", color: "#fff", boxShadow: "0 0 20px rgba(0,229,255,.12)" },
   sbIcon: { fontSize: 19, width: 22, textAlign: "center" },
   sbBadge: { marginLeft: "auto", background: V.magenta, color: "#fff", fontSize: 10, fontWeight: 800, padding: "2px 7px", borderRadius: 10, fontFamily: FONT },
   sbFoot: { marginTop: "auto" },
@@ -1063,8 +1098,8 @@ const S = {
   grpTag: { fontFamily: DISPLAY, fontSize: 12, fontWeight: 700, color: V.cyan, background: "rgba(0,229,255,.1)", padding: "3px 10px", borderRadius: 6, border: `1px solid rgba(0,229,255,.3)`, textTransform: "uppercase", letterSpacing: 1 },
   kick: { fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, fontFamily: NUM },
   mTeams: { display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "stretch", gap: 16 },
-  teamCell: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, minHeight: 118, background: "rgba(255,255,255,.03)", border: "1px solid transparent", borderRadius: 14, padding: "16px 8px", minWidth: 0, transition: "all .2s" },
-  teamWin: { background: GRAD.electricSoft, borderColor: "rgba(0,229,255,.5)", boxShadow: "0 0 22px rgba(0,229,255,.25)" },
+  teamCell: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, minHeight: 118, background: "rgba(255,255,255,.03)", border: "1px solid transparent", boxShadow: "none", borderRadius: 14, padding: "16px 8px", minWidth: 0, transition: "all .2s" },
+  teamWin: { background: GRAD.electricSoft, border: "1px solid rgba(0,229,255,.5)", boxShadow: "0 0 22px rgba(0,229,255,.25)" },
   flag: { fontSize: 44, lineHeight: 1, filter: "drop-shadow(0 4px 12px rgba(0,0,0,.55))" },
   teamLbl: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 15, lineHeight: 1.1, color: "#fff", textTransform: "uppercase", textAlign: "center", letterSpacing: .5, width: "100%", overflowWrap: "anywhere", hyphens: "auto" },
   scoreBox: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8 },

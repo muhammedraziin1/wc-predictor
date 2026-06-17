@@ -194,7 +194,19 @@ export async function getFixtures() {
   return data || [];
 }
 
-/* --------------------------- prediction stats --------------------------- */
+/* --------------------------- live scores --------------------------- */
+// In-play scores written by the sync (display only — never affects points).
+export async function getLiveScores() {
+  const { data, error } = await supabase
+    .from("live_scores")
+    .select("match_id, home, away, minute, status");
+  if (error) { console.warn("getLiveScores:", error.message); return {}; }
+  const out = {};
+  for (const r of data || []) out[r.match_id] = { h: r.home, a: r.away, minute: r.minute, status: r.status };
+  return out;
+}
+
+/* --------------------------- prediction stats (how everyone predicted) --------------------------- */
 // "How everyone predicted" a given match: distribution of scorelines + result
 // split. Only meaningful to reveal once the match is locked (caller enforces).
 export async function getPredictionStats(matchId) {

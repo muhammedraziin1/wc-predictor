@@ -131,6 +131,17 @@ const STAGE_MAP: Record<string, string> = {
 // Best-effort venue accent for KO matches (cyan default; matches theme).
 const KO_ACCENT = "#00E5FF";
 
+// Write the current in-play score for a match (display only).
+async function writeLive(supabase: any, matchId: string, m: any) {
+  const ft = m.score?.fullTime ?? {};
+  // free tier exposes the running score under fullTime even while in play
+  const hg = ft.home ?? 0, ag = ft.away ?? 0;
+  const minute = m.status === "PAUSED" ? "HT" : (m.minute != null ? String(m.minute) : "LIVE");
+  await supabase.from("live_scores").upsert(
+    { match_id: matchId, home: hg, away: ag, minute, status: m.status, updated_at: new Date().toISOString() },
+    { onConflict: "match_id" });
+}
+
 Deno.serve(async (_req) => {
   const token = Deno.env.get("FOOTBALL_DATA_TOKEN");
   const supaUrl = Deno.env.get("SUPABASE_URL");
@@ -159,7 +170,7 @@ Deno.serve(async (_req) => {
     return new Response(JSON.stringify({ error: String(e) }), { status: 502 });
   }
 
-  let written = 0, skipped = 0, koCreated = 0;
+  let written = 0, skipped = 0, koCreated = 0, liveWritten = 0;
   const unmatched: string[] = [];
 
   for (const m of matches) {
@@ -168,19 +179,30 @@ Deno.serve(async (_req) => {
     const stageCode = STAGE_MAP[m.stage] || (m.stage === "GROUP_STAGE" ? "Group" : null);
     const isKO = stageCode && stageCode !== "Group";
 
-    // ---- Group stage: map to hardcoded fixture IDs, write finished results ----
+    // ---- Group stage: map to hardcoded fixture IDs ----
     if (!isKO) {
+      const key = [canon(home), canon(away)].sort().join("|");
+      const id = PAIR_TO_ID[key];
+      if (!id) { if (m.status === "FINISHED") unmatched.push(`${home} v ${away}`); continue; }
+
+      // in-play: write the running score (display only)
+      if (m.status === "IN_PLAY" || m.status === "PAUSED") {
+        await writeLive(supabase, id, m);
+        liveWritten++;
+        continue;
+      }
       if (m.status !== "FINISHED") { continue; }
       const ft = m.score?.fullTime ?? {};
       const hg = ft.home, ag = ft.away;
       if (hg == null || ag == null) { skipped++; continue; }
-      const key = [canon(home), canon(away)].sort().join("|");
-      const id = PAIR_TO_ID[key];
-      if (!id) { unmatched.push(`${home} v ${away}`); continue; }
       const { error } = await supabase.from("results").upsert(
         { match_id: id, home: hg, away: ag }, { onConflict: "match_id" });
       if (error) { skipped++; continue; }
       written++;
+      // clear any stale live row now that it's final
+      await supabase.from("live_scores").upsert(
+        { match_id: id, home: hg, away: ag, minute: "FT", status: "FINISHED", updated_at: new Date().toISOString() },
+        { onConflict: "match_id" });
       continue;
     }
 
@@ -202,6 +224,13 @@ Deno.serve(async (_req) => {
     // keep the anti-cheat trigger in sync: record this KO kickoff
     await supabase.from("match_kickoffs").upsert(
       { match_id: koId, kickoff }, { onConflict: "match_id" });
+
+    // in-play KO: write running score (display only)
+    if (m.status === "IN_PLAY" || m.status === "PAUSED") {
+      await writeLive(supabase, koId, m);
+      liveWritten++;
+      continue;
+    }
 
     // if finished, write the result (post-ET goals + who advanced)
     if (m.status === "FINISHED") {
@@ -225,7 +254,7 @@ Deno.serve(async (_req) => {
     }
   }
 
-  return new Response(JSON.stringify({ ok: true, written, koCreated, skipped, unmatched }), {
+  return new Response(JSON.stringify({ ok: true, written, koCreated, liveWritten, skipped, unmatched }), {
     headers: { "Content-Type": "application/json" },
   });
 });
