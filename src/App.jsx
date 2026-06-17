@@ -264,7 +264,7 @@ function AuthScreen({ onAuthed, flash }) {
       <div style={S.signCard}>
         <div style={S.signCrest}>⚽</div>
         <div style={S.signEyebrow}>FIFA World Cup 2026</div>
-        <h1 style={S.signTitle}>Predictor</h1>
+        <h1 style={S.signTitle}>Mozilor FanZone</h1>
 
         <div style={S.authTabs}>
           <button className="ghost" style={{ ...S.authTab, ...(tab === "login" ? S.authTabOn : {}) }}
@@ -378,7 +378,7 @@ function Sidebar({ me, myRank, myPts, total, view, setView, signOut, liveCount, 
     <aside style={S.sidebar}>
       <div style={S.sbBrand}>
         <span style={S.sbCrest}>⚽</span>
-        <div><div style={S.sbTitle}>Predictor</div><div style={S.sbSub}>FIFA World Cup 2026</div></div>
+        <div><div style={S.sbTitle}>Mozilor FanZone</div><div style={S.sbSub}>FIFA World Cup 2026</div></div>
       </div>
       <nav style={S.sbNav}>
         {items.map((it) => (
@@ -445,7 +445,7 @@ function TopBar({ me, myRank, myPts, total, signOut, adminMode, setAdminMode, is
         <div style={S.topBrand}>
           <span style={S.topCrest}>⚽</span>
           <div>
-            <div style={S.topTitle}>World Cup Predictor</div>
+            <div style={S.topTitle}>Mozilor FanZone</div>
             <div style={S.topSub}>{me.name}</div>
           </div>
         </div>
@@ -963,7 +963,7 @@ const S = {
   /* desktop 3-region shell */
   shell: { display: "grid", minHeight: "100vh", maxWidth: 1680, margin: "0 auto" },
   deskMain: { padding: "36px 44px", minWidth: 0, overflow: "hidden" },
-  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 20, minWidth: 0 },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 20, minWidth: 0 },
 
   /* sidebar */
   sidebar: { position: "sticky", top: 0, height: "100vh", display: "flex", flexDirection: "column", padding: "24px 18px", borderRight: `1px solid ${V.stroke}`, background: "rgba(5,6,11,.4)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" },
@@ -1014,7 +1014,7 @@ const S = {
   signCard: { width: "100%", maxWidth: 390, ...GLASS, padding: 30, textAlign: "center" },
   signCrest: { fontSize: 50, marginBottom: 4, filter: "drop-shadow(0 0 16px rgba(0,229,255,.6))" },
   signEyebrow: { background: GRAD.electric, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", fontSize: 12, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", fontFamily: DISPLAY },
-  signTitle: { fontFamily: DISPLAY, fontSize: 46, fontWeight: 700, margin: "2px 0 8px", letterSpacing: 2, lineHeight: .95, textTransform: "uppercase", color: "#fff", textShadow: "0 0 30px rgba(0,229,255,.35)" },
+  signTitle: { fontFamily: DISPLAY, fontSize: 38, fontWeight: 700, margin: "2px 0 8px", letterSpacing: 1, lineHeight: 1, textTransform: "uppercase", color: "#fff", textShadow: "0 0 30px rgba(0,229,255,.35)" },
   signSub: { color: V.sub, fontSize: 14, lineHeight: 1.5, margin: "0 0 22px", fontWeight: 500 },
   signInput: { width: "100%", background: "rgba(0,0,0,.35)", border: `1px solid ${V.stroke}`, color: V.text, borderRadius: 12, padding: "14px 16px", fontSize: 16, textAlign: "center", marginBottom: 10, fontWeight: 600, fontFamily: NUM, letterSpacing: .5 },
   fieldLabel: { display: "block", textAlign: "left", color: V.sub, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1.5, margin: "2px 2px 6px", fontFamily: DISPLAY },
@@ -1066,7 +1066,7 @@ const S = {
   teamCell: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, minHeight: 118, background: "rgba(255,255,255,.03)", border: "1px solid transparent", borderRadius: 14, padding: "16px 8px", minWidth: 0, transition: "all .2s" },
   teamWin: { background: GRAD.electricSoft, borderColor: "rgba(0,229,255,.5)", boxShadow: "0 0 22px rgba(0,229,255,.25)" },
   flag: { fontSize: 44, lineHeight: 1, filter: "drop-shadow(0 4px 12px rgba(0,0,0,.55))" },
-  teamLbl: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 15, lineHeight: 1, color: "#fff", textTransform: "uppercase", textAlign: "center", letterSpacing: .5 },
+  teamLbl: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 15, lineHeight: 1.1, color: "#fff", textTransform: "uppercase", textAlign: "center", letterSpacing: .5, width: "100%", overflowWrap: "anywhere", hyphens: "auto" },
   scoreBox: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8 },
   scoreInput: { width: 52, height: 64, textAlign: "center", background: "rgba(0,0,0,.4)", border: `1px solid ${V.stroke}`, color: "#fff", borderRadius: 12, fontSize: 34, fontWeight: 700, fontFamily: NUM, boxShadow: "inset 0 0 18px rgba(0,229,255,.1)" },
   colon: { color: V.cyan, fontSize: 26, fontWeight: 700, textShadow: "0 0 12px rgba(0,229,255,.8)", fontFamily: NUM },
