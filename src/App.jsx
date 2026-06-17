@@ -155,7 +155,7 @@ export default function App() {
   if (!loaded) return <Splash text="Loading…" />;
   if (!me) return <AuthScreen onAuthed={loadSession} flash={flash} />;
 
-  const showRail = vp.isWide && view === "matches"; // rail only on wide + matches tab
+  const showRail = false; // leaderboard rail removed from matches; it has its own tab
 
   const content = (
     <>
@@ -382,7 +382,7 @@ function Sidebar({ me, myRank, myPts, total, view, setView, signOut, liveCount, 
       </div>
       <nav style={S.sbNav}>
         {items.map((it) => (
-          <button key={it.key} className="ghost"
+          <button key={it.key} className={`sidenav${view === it.key ? " sidenav-on" : ""}`}
             style={{ ...S.sbItem, ...(view === it.key ? S.sbItemOn : {}) }}
             onClick={() => setView(it.key)}>
             <span style={S.sbIcon}>{it.icon}</span> {it.label}
@@ -923,6 +923,9 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Chakra+Petch:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 .primary:hover{filter:brightness(1.12) saturate(1.1);box-shadow:0 0 28px rgba(0,229,255,.5);}
 .ghost:hover{border-color:rgba(255,255,255,.28);color:#fff;}
+.sidenav{outline:none;transition:background .15s,color .15s;}
+.sidenav:focus,.sidenav:focus-visible{outline:none;}
+.sidenav:not(.sidenav-on):hover{background:rgba(255,255,255,.05);color:#fff;}
 .num:focus,input:focus{outline:none;border-color:#00E5FF;box-shadow:0 0 0 3px rgba(0,229,255,.25),0 0 18px rgba(0,229,255,.3);}
 .lbrow:hover{cursor:pointer;background:rgba(255,255,255,.09);}
 .navbtn:active{transform:scale(.9);}
@@ -955,12 +958,12 @@ const GLASS = {
 const S = {
   page: { minHeight: "100vh", background: BACKDROP, backgroundAttachment: "fixed", color: V.text, fontFamily: FONT, paddingBottom: 92 },
   main: { maxWidth: 560, margin: "0 auto", padding: "16px 14px 24px" },
-  col: { display: "flex", flexDirection: "column", gap: 24 },
+  col: { display: "flex", flexDirection: "column", gap: 32 },
 
   /* desktop 3-region shell */
   shell: { display: "grid", minHeight: "100vh", maxWidth: 1680, margin: "0 auto" },
-  deskMain: { padding: "28px 30px", minWidth: 0, overflow: "hidden" },
-  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 15, minWidth: 0 },
+  deskMain: { padding: "36px 44px", minWidth: 0, overflow: "hidden" },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 20, minWidth: 0 },
 
   /* sidebar */
   sidebar: { position: "sticky", top: 0, height: "100vh", display: "flex", flexDirection: "column", padding: "24px 18px", borderRight: `1px solid ${V.stroke}`, background: "rgba(5,6,11,.4)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" },
