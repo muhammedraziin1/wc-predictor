@@ -7,8 +7,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",          // new versions activate without a manual prompt
-      includeAssets: ["icon-192.png", "icon-512.png"],
+      includeAssets: ["icon-192.png", "icon-512.png", "icon-maskable-512.png"],
       manifest: {
+        id: "/",
         name: "Mozilor FanZone",
         short_name: "FanZone",
         description: "FIFA World Cup 2026 prediction game for Mozilor.",
@@ -19,9 +20,9 @@ export default defineConfig({
         start_url: "/",
         scope: "/",
         icons: [
-          { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
-          { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
-          { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+          { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
       },
       workbox: {
