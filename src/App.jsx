@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   NOW, factOf, flag, FIXTURES,
   SEEDED_RESULTS, scoreMatch, fmtKick, dayKey, countdown,
@@ -7,9 +7,21 @@ import {
 import {
   signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange,
   amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult,
-  requestPasswordReset, updatePassword, getFixtures, getPredictionStats,
+  requestPasswordReset, updatePassword, getFixtures, getPredictionStats, isAllowedEmail, ALLOWED_DOMAIN,
 } from "./db.js";
 import { supabaseConfigured } from "./supabase.js";
+
+// Responsive breakpoints (match the mockup): desktop ≥1200 has the rail,
+// 920–1200 has sidebar+content, <920 is the mobile shell.
+function useViewport() {
+  const [w, setW] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
+  useEffect(() => {
+    const onResize = () => setW(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return { w, isMobile: w < 920, isMedium: w >= 920 && w < 1200, isWide: w >= 1200, isDesktop: w >= 920 };
+}
 
 /* ====================================================================== */
 export default function App() {
@@ -139,28 +151,52 @@ export default function App() {
   if (!loaded) return <Splash text="Loading…" />;
   if (!me) return <AuthScreen onAuthed={loadSession} flash={flash} />;
 
+  const vp = useViewport();
+  const showRail = vp.isWide && view === "matches"; // rail only on wide + matches tab
+
+  const content = (
+    <>
+      {view === "matches" && (
+        <MatchesView upcoming={upcoming} live={live} futureLocked={futureLocked}
+          me={me} predictions={predictions} setPred={setPred} desktop={vp.isDesktop} />
+      )}
+      {view === "leaderboard" && <LeaderboardView leaderboard={leaderboard} me={me} fullPage={vp.isDesktop} />}
+      {view === "results" && (
+        <ResultsView finished={finished} me={me} predictions={predictions} desktop={vp.isDesktop} />
+      )}
+      {view === "mypicks" && (
+        <MyPicksView enriched={enriched} me={me} predictions={predictions} desktop={vp.isDesktop} />
+      )}
+      {view === "admin" && adminMode && isOrganizer && (
+        <AdminView enriched={enriched} results={effectiveResults} setResult={setResultVal} />
+      )}
+    </>
+  );
+
+  if (vp.isDesktop) {
+    return (
+      <div style={S.page}>
+        <style>{CSS}</style>
+        <div style={{ ...S.shell, gridTemplateColumns: showRail ? "248px 1fr 320px" : "248px 1fr" }}>
+          <Sidebar me={me} myRank={myRank} myPts={myRow?.total ?? 0} total={leaderboard.length}
+            view={view} setView={setView} signOut={signOut} liveCount={live.length}
+            adminMode={adminMode} setAdminMode={setAdminMode} isOrganizer={isOrganizer} />
+          <main style={S.deskMain}>{content}</main>
+          {showRail && <LeaderboardRail leaderboard={leaderboard} me={me} myRank={myRank} />}
+        </div>
+        {toast && <div style={S.toast}>{toast}</div>}
+      </div>
+    );
+  }
+
+  // mobile (unchanged experience)
   return (
     <div style={S.page}>
       <style>{CSS}</style>
       <TopBar me={me} myRank={myRank} myPts={myRow?.total ?? 0} total={leaderboard.length}
         view={view} setView={setView} signOut={signOut}
         adminMode={adminMode} setAdminMode={setAdminMode} isOrganizer={isOrganizer} />
-      <main style={S.main}>
-        {view === "matches" && (
-          <MatchesView upcoming={upcoming} live={live} futureLocked={futureLocked}
-            me={me} predictions={predictions} setPred={setPred} />
-        )}
-        {view === "leaderboard" && <LeaderboardView leaderboard={leaderboard} me={me} />}
-        {view === "results" && (
-          <ResultsView finished={finished} me={me} predictions={predictions} />
-        )}
-        {view === "mypicks" && (
-          <MyPicksView enriched={enriched} me={me} predictions={predictions} />
-        )}
-        {view === "admin" && adminMode && isOrganizer && (
-          <AdminView enriched={enriched} results={effectiveResults} setResult={setResultVal} />
-        )}
-      </main>
+      <main style={S.main}>{content}</main>
       <BottomNav view={view} setView={setView} adminMode={adminMode && isOrganizer} liveCount={live.length} />
       {toast && <div style={S.toast}>{toast}</div>}
     </div>
@@ -242,10 +278,10 @@ function AuthScreen({ onAuthed, flash }) {
           </>
         )}
 
-        <label style={S.fieldLabel}>Email</label>
+        <label style={S.fieldLabel}>Email{tab === "signup" ? ` (@${ALLOWED_DOMAIN} only)` : ""}</label>
         <input value={email} type="email" autoComplete="email"
           onChange={(e) => { setEmail(e.target.value); setErr(""); }}
-          placeholder="you@example.com" style={S.signInput} />
+          placeholder={tab === "signup" ? `you@${ALLOWED_DOMAIN}` : "you@example.com"} style={S.signInput} />
 
         <label style={S.fieldLabel}>Password</label>
         <input value={password} type="password"
@@ -323,6 +359,78 @@ function RecoveryScreen({ onDone, flash }) {
         </button>
       </div>
     </div>
+  );
+}
+
+/* ---- Desktop sidebar nav ---- */
+function Sidebar({ me, myRank, myPts, total, view, setView, signOut, liveCount, adminMode, setAdminMode, isOrganizer }) {
+  const items = [
+    { key: "matches", icon: "⚽", label: "Matches", badge: liveCount > 0 ? liveCount : null },
+    { key: "results", icon: "📋", label: "Results" },
+    { key: "mypicks", icon: "🎯", label: "My picks" },
+    { key: "leaderboard", icon: "🏆", label: "Leaderboard" },
+  ];
+  if (adminMode && isOrganizer) items.push({ key: "admin", icon: "🛠", label: "Enter results" });
+  return (
+    <aside style={S.sidebar}>
+      <div style={S.sbBrand}>
+        <span style={S.sbCrest}>⚽</span>
+        <div><div style={S.sbTitle}>Predictor</div><div style={S.sbSub}>FIFA World Cup 2026</div></div>
+      </div>
+      <nav style={S.sbNav}>
+        {items.map((it) => (
+          <button key={it.key} className="ghost"
+            style={{ ...S.sbItem, ...(view === it.key ? S.sbItemOn : {}) }}
+            onClick={() => setView(it.key)}>
+            <span style={S.sbIcon}>{it.icon}</span> {it.label}
+            {it.badge != null && <span style={S.sbBadge}>{it.badge}</span>}
+          </button>
+        ))}
+      </nav>
+      <div style={S.sbFoot}>
+        <div style={S.sbRankCard}>
+          <div style={S.sbRankLabel}>Your standing</div>
+          <div style={S.sbRankBig}><span style={S.sbRankPos}>#{myRank || "—"}</span><span style={S.sbRankOf}>of {total}</span></div>
+          <div style={S.sbRankPts}>{myPts} pts</div>
+        </div>
+        {isOrganizer && (
+          <button className="ghost" style={S.sbSecondary} onClick={() => setAdminMode((a) => !a)}>
+            {adminMode ? "Hide organizer tools" : "Organizer tools"}
+          </button>
+        )}
+        <button className="ghost" style={S.sbSecondary} onClick={signOut}>Log out</button>
+      </div>
+    </aside>
+  );
+}
+
+/* ---- Desktop right rail: compact leaderboard, top 5 + gap + neighbors ---- */
+function LeaderboardRail({ leaderboard, me, myRank }) {
+  // top 5, then if I'm outside it, a gap + (above / me / below)
+  const top = leaderboard.slice(0, 5);
+  let neighbors = [];
+  const myIdx = leaderboard.findIndex((r) => r.id === me?.id);
+  if (myIdx >= 5) {
+    neighbors = leaderboard.slice(Math.max(5, myIdx - 1), myIdx + 2);
+  }
+  const Row = (r, i) => (
+    <div key={r.id} className="lbrow" style={{ ...S.railRow, ...(r.id === me?.id ? S.railRowMe : {}) }}>
+      <div style={S.railRank(i)}>{i + 1}</div>
+      <div style={S.railName}>{r.name}{r.id === me?.id && <span style={S.youTag}>YOU</span>}</div>
+      <div style={S.railPts}>{r.total}</div>
+    </div>
+  );
+  return (
+    <aside style={S.rail}>
+      <div style={S.railHead}>🏆 Live leaderboard</div>
+      {top.map((r, i) => Row(r, i))}
+      {neighbors.length > 0 && (
+        <>
+          <div style={S.railGap}>· · ·</div>
+          {neighbors.map((r) => Row(r, leaderboard.indexOf(r)))}
+        </>
+      )}
+    </aside>
   );
 }
 
@@ -421,10 +529,11 @@ function PredictCard({ m, pred, setPred, locked }) {
   );
 }
 
-function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred }) {
+function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred, desktop }) {
   const myPreds = predictions[me.id] || {};
   const hasPick = (m) => { const p = myPreds[m.id]; return p && p.h !== "" && p.a !== "" && p.h != null && p.a != null; };
   const unpicked = upcoming.filter((m) => !hasPick(m)).length;
+  const gridStyle = desktop ? S.grid : undefined;
 
   // group the next locked future matches by day (show just the next day or two)
   const futureByDay = [];
@@ -441,6 +550,7 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred })
       {live.length > 0 && (
         <section>
           <div style={S.sectionHead}><span style={S.liveDot} /> In progress / awaiting result</div>
+          <div style={gridStyle}>
           {live.map((m) => {
             const has = hasPick(m); const p = myPreds[m.id];
             return (
@@ -454,6 +564,7 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred })
               </div>
             );
           })}
+          </div>
         </section>
       )}
 
@@ -466,9 +577,11 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred })
         {upcoming.length === 0 && (
           <div style={S.empty}>Nothing open right now. Each match opens 24 hours before kickoff.</div>
         )}
-        {upcoming.map((m) => (
-          <PredictCard key={m.id} m={m} pred={myPreds[m.id]} setPred={setPred} locked={false} />
-        ))}
+        <div style={gridStyle}>
+          {upcoming.map((m) => (
+            <PredictCard key={m.id} m={m} pred={myPreds[m.id]} setPred={setPred} locked={false} />
+          ))}
+        </div>
       </section>
 
       {nextDays.length > 0 && (
@@ -492,7 +605,7 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred })
   );
 }
 
-function ResultsView({ finished, me, predictions }) {
+function ResultsView({ finished, me, predictions, desktop }) {
   const mine = predictions[me.id] || {};
   // group finished matches by day (finished is already newest-first)
   const byDay = [];
@@ -502,6 +615,45 @@ function ResultsView({ finished, me, predictions }) {
     if (!cur || cur.k !== k) { cur = { k, items: [] }; byDay.push(cur); }
     cur.items.push(m);
   });
+
+  const ptsColor = (sc) => sc == null ? V.sub : sc.points >= 10 ? V.good : sc.points > 0 ? V.gold : V.sub;
+
+  // desktop: compact full-width horizontal rows
+  if (desktop) {
+    return (
+      <div style={S.col}>
+        <section>
+          <div style={S.sectionHead}>Results <span style={S.badge}>{finished.length} played</span></div>
+          {finished.length === 0 && <div style={S.empty}>No results yet. Scores appear here as matches finish.</div>}
+          {byDay.map((day) => (
+            <div key={day.k}>
+              <div style={S.dayLabel}>{day.k}</div>
+              <div style={S.rows}>
+                {day.items.map((m) => {
+                  const pred = mine[m.id];
+                  const had = pred && pred.h !== "" && pred.a !== "" && pred.h != null && pred.a != null;
+                  const sc = had ? scoreMatch(pred, m.result, { knockout: m.ko }) : null;
+                  return (
+                    <div key={m.id} style={{ ...S.lrow, borderLeft: `3px solid ${m.accent}` }}>
+                      <span style={S.lrTag}>{tagOf(m)}</span>
+                      <div style={S.lrTeams}>
+                        <span>{flag(m.home)} {m.home}</span>
+                        <span style={S.lrScore}>{m.result.h} : {m.result.a}</span>
+                        <span>{m.away} {flag(m.away)}</span>
+                      </div>
+                      <span style={S.lrPick}>{had ? `Your pick: ${pred.h}-${pred.a}` : "No pick"}{sc ? <><br />{sc.breakdown}</> : ""}</span>
+                      <span style={{ ...S.lrPts, color: ptsColor(sc) }}>{sc != null ? `${sc.exact ? "✓ " : ""}+${sc.points}` : "—"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div style={S.col}>
       <section>
@@ -605,18 +757,27 @@ function MatchStats({ m }) {
   );
 }
 
-function LeaderboardView({ leaderboard, me }) {
+function LeaderboardView({ leaderboard, me, fullPage }) {
   const [open, setOpen] = useState(null);
+  const meRef = useRef(null);
+  const myIdx = leaderboard.findIndex((r) => r.id === me.id);
+  const jumpToMe = () => meRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   return (
     <div style={S.col}>
       <section>
-        <div style={S.sectionHead}>Live leaderboard</div>
+        <div style={S.sectionHead}>
+          {fullPage ? "Leaderboard" : "Live leaderboard"}
+          {leaderboard.length > 0 && <span style={S.badge}>{leaderboard.length} player{leaderboard.length === 1 ? "" : "s"}</span>}
+          {fullPage && myIdx >= 0 && (
+            <button className="ghost" style={S.jumpBtn} onClick={jumpToMe}>↓ Jump to my position (#{myIdx + 1})</button>
+          )}
+        </div>
         {leaderboard.length === 0 && <div style={S.empty}>The board is empty. First prediction puts you on top.</div>}
         <div style={S.lbList}>
           {leaderboard.map((r, i) => {
             const isMe = r.id === me.id;
             return (
-              <div key={r.id}>
+              <div key={r.id} ref={isMe ? meRef : null}>
                 <div className="lbrow" style={{ ...S.lbRow, ...(isMe ? S.lbMe : {}) }}
                   onClick={() => setOpen(open === r.id ? null : r.id)}>
                   <span style={S.lbRank(i)}>{i + 1}</span>
@@ -635,7 +796,7 @@ function LeaderboardView({ leaderboard, me }) {
   );
 }
 
-function MyPicksView({ enriched, me, predictions }) {
+function MyPicksView({ enriched, me, predictions, desktop }) {
   const mine = predictions[me.id] || {};
   const rows = enriched
     .filter((m) => { const p = mine[m.id]; return p && p.h !== "" && p.a !== "" && p.h != null && p.a != null; })
@@ -793,6 +954,55 @@ const S = {
   main: { maxWidth: 560, margin: "0 auto", padding: "16px 14px 24px" },
   col: { display: "flex", flexDirection: "column", gap: 24 },
 
+  /* desktop 3-region shell */
+  shell: { display: "grid", minHeight: "100vh", maxWidth: 1680, margin: "0 auto" },
+  deskMain: { padding: "28px 30px", minWidth: 0, overflow: "hidden" },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 15, minWidth: 0 },
+
+  /* sidebar */
+  sidebar: { position: "sticky", top: 0, height: "100vh", display: "flex", flexDirection: "column", padding: "24px 18px", borderRight: `1px solid ${V.stroke}`, background: "rgba(5,6,11,.4)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" },
+  sbBrand: { display: "flex", alignItems: "center", gap: 11, padding: "6px 10px 22px" },
+  sbCrest: { fontSize: 28, filter: "drop-shadow(0 0 12px rgba(0,229,255,.5))" },
+  sbTitle: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 18, letterSpacing: 1, textTransform: "uppercase", lineHeight: 1, color: "#fff" },
+  sbSub: { color: V.sub, fontSize: 11, marginTop: 2 },
+  sbNav: { display: "flex", flexDirection: "column", gap: 4, marginTop: 4 },
+  sbItem: { display: "flex", alignItems: "center", gap: 13, padding: "13px 14px", borderRadius: 12, color: V.sub, fontFamily: DISPLAY, fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: .6, cursor: "pointer", border: "1px solid transparent", background: "none", width: "100%", textAlign: "left" },
+  sbItemOn: { background: GRAD.electricSoft, borderColor: "rgba(0,229,255,.35)", color: "#fff", boxShadow: "0 0 20px rgba(0,229,255,.12)" },
+  sbIcon: { fontSize: 19, width: 22, textAlign: "center" },
+  sbBadge: { marginLeft: "auto", background: V.magenta, color: "#fff", fontSize: 10, fontWeight: 800, padding: "2px 7px", borderRadius: 10, fontFamily: FONT },
+  sbFoot: { marginTop: "auto" },
+  sbRankCard: { padding: 16, borderRadius: 14, background: "rgba(255,255,255,.04)", border: `1px solid ${V.strokeSoft}` },
+  sbRankLabel: { fontSize: 10, color: V.sub, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", fontFamily: DISPLAY },
+  sbRankBig: { display: "flex", alignItems: "baseline", gap: 8, marginTop: 6 },
+  sbRankPos: { fontFamily: NUM, fontWeight: 700, fontSize: 32, color: "#fff", lineHeight: 1 },
+  sbRankOf: { fontSize: 13, color: V.sub },
+  sbRankPts: { marginTop: 8, fontFamily: NUM, fontWeight: 700, fontSize: 16, color: V.cyan, textShadow: "0 0 12px rgba(0,229,255,.4)" },
+  sbSecondary: { marginTop: 10, width: "100%", background: "none", border: `1px solid ${V.strokeSoft}`, color: V.sub, padding: 10, borderRadius: 10, fontFamily: DISPLAY, fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: .6, cursor: "pointer" },
+
+  /* right rail */
+  rail: { position: "sticky", top: 0, height: "100vh", overflowY: "auto", padding: "28px 20px", borderLeft: `1px solid ${V.stroke}`, background: "rgba(5,6,11,.3)" },
+  railHead: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", color: "#fff", marginBottom: 16 },
+  railRow: { display: "flex", alignItems: "center", gap: 11, padding: "11px 12px", borderRadius: 12, marginBottom: 8, background: V.glass, border: `1px solid ${V.stroke}` },
+  railRowMe: { borderColor: "rgba(255,200,61,.5)", boxShadow: "0 0 20px rgba(255,200,61,.16)" },
+  railRank: (i) => ({ width: 30, height: 30, borderRadius: 9, display: "grid", placeItems: "center", fontFamily: NUM, fontWeight: 700, fontSize: 15, color: "#04121a", flexShrink: 0,
+    background: i === 0 ? "linear-gradient(135deg,#FFC83D,#FF9E2D)" : i === 1 ? "linear-gradient(135deg,#D7E0F0,#9FB0CC)" : i === 2 ? "linear-gradient(135deg,#E0954E,#B36A2E)" : "rgba(255,255,255,.1)", ...(i > 2 ? { color: "#fff" } : {}) }),
+  railName: { flex: 1, fontFamily: DISPLAY, fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "#fff", display: "flex", alignItems: "center", gap: 6 },
+  railPts: { fontFamily: NUM, fontWeight: 700, fontSize: 18, color: "#fff" },
+  railGap: { textAlign: "center", color: V.sub, fontSize: 18, letterSpacing: 3, padding: "4px 0 10px" },
+
+  /* horizontal list rows (desktop results / my picks) */
+  rows: { display: "flex", flexDirection: "column", gap: 10 },
+  lrow: { display: "grid", gridTemplateColumns: "110px 1fr auto auto", alignItems: "center", gap: 18, padding: "14px 18px", borderRadius: 14, ...GLASS },
+  lrTag: { fontFamily: DISPLAY, fontSize: 11, fontWeight: 700, color: V.cyan, textTransform: "uppercase", letterSpacing: .6 },
+  lrTeams: { display: "flex", alignItems: "center", gap: 14, fontFamily: DISPLAY, fontWeight: 700, fontSize: 16, textTransform: "uppercase", letterSpacing: .4, minWidth: 0 },
+  lrScore: { fontFamily: NUM, fontWeight: 700, fontSize: 24, color: "#fff", whiteSpace: "nowrap" },
+  lrPick: { fontSize: 12, color: V.sub, textAlign: "right", minWidth: 130 },
+  lrPts: { fontFamily: NUM, fontWeight: 700, fontSize: 22, minWidth: 54, textAlign: "right" },
+
+  /* full leaderboard page */
+  jumpBtn: { marginLeft: "auto", background: GRAD.electricSoft, border: "1px solid rgba(0,229,255,.4)", color: V.cyan, fontFamily: DISPLAY, fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: .5, padding: "8px 14px", borderRadius: 10, cursor: "pointer" },
+
+
   /* sign in */
   signWrap: { minHeight: "100vh", display: "grid", placeItems: "center", padding: 20, background: BACKDROP, backgroundAttachment: "fixed", color: V.text, fontFamily: FONT },
   signCard: { width: "100%", maxWidth: 390, ...GLASS, padding: 30, textAlign: "center" },
@@ -847,7 +1057,7 @@ const S = {
   grpTag: { fontFamily: DISPLAY, fontSize: 12, fontWeight: 700, color: V.cyan, background: "rgba(0,229,255,.1)", padding: "3px 10px", borderRadius: 6, border: `1px solid rgba(0,229,255,.3)`, textTransform: "uppercase", letterSpacing: 1 },
   kick: { fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, fontFamily: NUM },
   mTeams: { display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "stretch", gap: 16 },
-  teamCell: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, background: "rgba(255,255,255,.03)", border: "1px solid transparent", borderRadius: 14, padding: "16px 8px", minWidth: 0, transition: "all .2s" },
+  teamCell: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, minHeight: 118, background: "rgba(255,255,255,.03)", border: "1px solid transparent", borderRadius: 14, padding: "16px 8px", minWidth: 0, transition: "all .2s" },
   teamWin: { background: GRAD.electricSoft, borderColor: "rgba(0,229,255,.5)", boxShadow: "0 0 22px rgba(0,229,255,.25)" },
   flag: { fontSize: 44, lineHeight: 1, filter: "drop-shadow(0 4px 12px rgba(0,0,0,.55))" },
   teamLbl: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 15, lineHeight: 1, color: "#fff", textTransform: "uppercase", textAlign: "center", letterSpacing: .5 },

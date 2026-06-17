@@ -29,7 +29,6 @@ const ALIASES: Record<string, string> = {
   "iriran": "iran",
   "czechrepublic": "czechia",
   "turkiye": "turkiye",
-"turkey": "turkiye",
   "cotedivoire": "ivorycoast",
   "ivorycoast": "ivorycoast",
   "capeverdeislands": "capeverde",
@@ -120,6 +119,18 @@ const PAIR_TO_ID: Record<string, string> = {
   "argentina|jordan": "G72",
 };
 
+// Map football-data.org stage codes to our short stage codes.
+const STAGE_MAP: Record<string, string> = {
+  LAST_16: "R16", ROUND_OF_16: "R16",
+  LAST_32: "R32", ROUND_OF_32: "R32",
+  QUARTER_FINALS: "QF", QUARTER_FINAL: "QF",
+  SEMI_FINALS: "SF", SEMI_FINAL: "SF",
+  THIRD_PLACE: "3rd", THIRD_PLACE_PLAY_OFF: "3rd",
+  FINAL: "Final",
+};
+// Best-effort venue accent for KO matches (cyan default; matches theme).
+const KO_ACCENT = "#00E5FF";
+
 Deno.serve(async (_req) => {
   const token = Deno.env.get("FOOTBALL_DATA_TOKEN");
   const supaUrl = Deno.env.get("SUPABASE_URL");
@@ -131,10 +142,11 @@ Deno.serve(async (_req) => {
 
   const supabase = createClient(supaUrl, serviceKey);
 
-  // WC = FIFA World Cup competition code on football-data.org
+  // Fetch ALL matches (not only finished) so we can create knockout fixtures
+  // as soon as both teams are known, before kickoff.
   let matches: any[] = [];
   try {
-    const res = await fetch("https://api.football-data.org/v4/competitions/WC/matches?status=FINISHED", {
+    const res = await fetch("https://api.football-data.org/v4/competitions/WC/matches", {
       headers: { "X-Auth-Token": token },
     });
     if (!res.ok) {
@@ -147,31 +159,73 @@ Deno.serve(async (_req) => {
     return new Response(JSON.stringify({ error: String(e) }), { status: 502 });
   }
 
-  let written = 0, skipped = 0;
+  let written = 0, skipped = 0, koCreated = 0;
   const unmatched: string[] = [];
 
   for (const m of matches) {
     const home = m.homeTeam?.name ?? m.homeTeam?.shortName ?? "";
     const away = m.awayTeam?.name ?? m.awayTeam?.shortName ?? "";
-    // 90' + stoppage result. football-data exposes fullTime; for our rules that's
-    // regulation+stoppage (it does not add ET here for group stage; KO not in scope).
-    const ft = m.score?.fullTime ?? {};
-    const hg = ft.home, ag = ft.away;
-    if (hg == null || ag == null) { skipped++; continue; }
+    const stageCode = STAGE_MAP[m.stage] || (m.stage === "GROUP_STAGE" ? "Group" : null);
+    const isKO = stageCode && stageCode !== "Group";
 
-    const key = [canon(home), canon(away)].sort().join("|");
-    const id = PAIR_TO_ID[key];
-    if (!id) { unmatched.push(`${home} v ${away}`); continue; }
+    // ---- Group stage: map to hardcoded fixture IDs, write finished results ----
+    if (!isKO) {
+      if (m.status !== "FINISHED") { continue; }
+      const ft = m.score?.fullTime ?? {};
+      const hg = ft.home, ag = ft.away;
+      if (hg == null || ag == null) { skipped++; continue; }
+      const key = [canon(home), canon(away)].sort().join("|");
+      const id = PAIR_TO_ID[key];
+      if (!id) { unmatched.push(`${home} v ${away}`); continue; }
+      const { error } = await supabase.from("results").upsert(
+        { match_id: id, home: hg, away: ag }, { onConflict: "match_id" });
+      if (error) { skipped++; continue; }
+      written++;
+      continue;
+    }
 
-    const { error } = await supabase.from("results").upsert(
-      { match_id: id, home: hg, away: ag },
-      { onConflict: "match_id" }
-    );
-    if (error) { skipped++; continue; }
-    written++;
+    // ---- Knockout: create the fixture once both teams are known ----
+    // Skip placeholder rows where teams aren't decided yet.
+    if (!home || !away) { continue; }
+    const koId = `K${m.id}`;            // stable id from the API match id
+    const kickoff = m.utcDate;          // ISO string
+    if (!kickoff) { continue; }
+
+    // upsert the fixture (idempotent)
+    const fxErr = (await supabase.from("fixtures").upsert({
+      id: koId, kickoff, home, away, stage: stageCode,
+      city: m.venue ?? "", country: "", accent: KO_ACCENT,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "id" })).error;
+    if (!fxErr) koCreated++;
+
+    // keep the anti-cheat trigger in sync: record this KO kickoff
+    await supabase.from("match_kickoffs").upsert(
+      { match_id: koId, kickoff }, { onConflict: "match_id" });
+
+    // if finished, write the result (post-ET goals + who advanced)
+    if (m.status === "FINISHED") {
+      const ft = m.score?.fullTime ?? {};
+      // football-data 'fullTime' includes extra time for KO matches.
+      let hg = ft.home, ag = ft.away;
+      if (hg == null || ag == null) { continue; }
+      // who advanced: prefer explicit winner; fall back to goals.
+      const w = m.score?.winner; // 'HOME_TEAM' | 'AWAY_TEAM' | 'DRAW' (DRAW => decided on pens)
+      let adv: string | null = null;
+      if (w === "HOME_TEAM") adv = "home";
+      else if (w === "AWAY_TEAM") adv = "away";
+      else if (hg > ag) adv = "home";
+      else if (ag > hg) adv = "away";
+      // if level and API says DRAW (penalty decision not exposed on free tier),
+      // leave adv null — organizer sets the advancer; scoring falls back to goals.
+      const row: Record<string, unknown> = { match_id: koId, home: hg, away: ag };
+      if (adv) row.adv = adv;
+      const { error } = await supabase.from("results").upsert(row, { onConflict: "match_id" });
+      if (!error) written++; else skipped++;
+    }
   }
 
-  return new Response(JSON.stringify({ ok: true, written, skipped, unmatched }), {
+  return new Response(JSON.stringify({ ok: true, written, koCreated, skipped, unmatched }), {
     headers: { "Content-Type": "application/json" },
   });
 });

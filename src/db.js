@@ -7,11 +7,20 @@ import { supabase } from "./supabase.js";
    ========================================================================= */
 
 /* ----------------------------- auth ----------------------------- */
+// Only this email domain may create accounts. The client check below is for
+// instant UX feedback; the REAL enforcement is a database trigger (see
+// restrict_signup_domain.sql) that rejects other domains even via direct API.
+export const ALLOWED_DOMAIN = "mozilor.com";
+export function isAllowedEmail(email) {
+  return email.trim().toLowerCase().endsWith("@" + ALLOWED_DOMAIN);
+}
+
 // Sign up: creates the auth user, then a profile row with their display name.
 // Returns { user } | { error }.
 export async function signUp(email, password, name) {
   const display = name.trim();
   if (!display) return { error: "Enter a display name." };
+  if (!isAllowedEmail(email)) return { error: `Sign-up is limited to @${ALLOWED_DOMAIN} email addresses.` };
 
   const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
   if (error) return { error: error.message };
