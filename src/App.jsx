@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
-  NOW, factOf, flag, FIXTURES,
+  factOf, flag, FIXTURES,
   SEEDED_RESULTS, scoreMatch, fmtKick, fmtKickIST, fmtTimeIST, dayKey, countdown, lockTime, openTime,
   STAGE_LABEL, STAGE_ORDER, isKnockout, normalizeDbFixture,
 } from "./data.js";
@@ -109,24 +109,33 @@ export default function App() {
     () => [...FIXTURES, ...koFixtures.map(normalizeDbFixture)].sort((a, b) => a.kickoff - b.kickoff),
     [koFixtures]
   );
-  const enriched = useMemo(() => allFixtures.map((f) => {
+  const enriched = useMemo(() => {
+    const now = new Date();   // live time, recomputed every tick (NOT the frozen module NOW)
+    return allFixtures.map((f) => {
     const r = effectiveResults[f.id];
     const settled = r && r.h !== "" && r.a !== "" && r.h != null && r.a != null;
-    const kickedOff = NOW >= f.kickoff;
+    const kickedOff = now >= f.kickoff;
     const lock = lockTime(f.kickoff);          // 9 PM IST cutoff for this match
     const opens = openTime(f.kickoff);         // 12 AM IST on the lock's day
-    const msToLock = lock - NOW;
+    const msToLock = lock - now;
     // Open from midnight IST of the lock's day until the 9 PM IST lock. Before
     // that midnight it's "future" (not yet open); after the lock it's locked.
-    const open = NOW >= opens && msToLock > 0 && !settled;
-    const future = NOW < opens && !settled;
+    const open = now >= opens && msToLock > 0 && !settled;
+    const future = now < opens && !settled;
     const locked = !open;
     const ko = isKnockout(f.stage);
     return { ...f, ko, lock, opens, msToLock, settled, kickedOff, future, open, locked, result: settled ? r : null };
-  }), [allFixtures, effectiveResults, tick]);
+  });
+  }, [allFixtures, effectiveResults, tick]);
 
   const upcoming = useMemo(() => enriched.filter((f) => f.open), [enriched]);
   const futureLocked = useMemo(() => enriched.filter((f) => f.future && !f.settled), [enriched]);
+  // Locked but not yet settled: past the 9 PM cutoff, awaiting kickoff OR in progress.
+  // These stay visible (with the user's frozen pick) instead of vanishing.
+  const lockedPending = useMemo(
+    () => enriched.filter((f) => f.locked && !f.future && !f.settled).sort((a, b) => a.kickoff - b.kickoff),
+    [enriched]
+  );
   const live = useMemo(() => enriched.filter((f) => f.kickedOff && !f.settled), [enriched]);
   const finished = useMemo(() => enriched.filter((f) => f.settled).reverse(), [enriched]);
 
@@ -150,7 +159,7 @@ export default function App() {
     <>
       {view === "matches" && (
         <MatchesView upcoming={upcoming} live={live} futureLocked={futureLocked}
-          me={me} predictions={predictions} setPred={setPred} desktop={vp.isDesktop} />
+          lockedPending={lockedPending} me={me} predictions={predictions} setPred={setPred} desktop={vp.isDesktop} />
       )}
       {view === "leaderboard" && <LeaderboardView leaderboard={leaderboard} me={me} fullPage={vp.isDesktop} />}
       {view === "results" && (
@@ -523,7 +532,7 @@ function FunFact({ home, away, seed }) {
 function PredictCard({ m, pred, setPred, locked }) {
   const has = pred && pred.h !== "" && pred.a !== "" && pred.h != null && pred.a != null;
   const winner = has ? (+pred.h > +pred.a ? "home" : +pred.h < +pred.a ? "away" : "draw") : null;
-  const lockMs = m.lock - NOW;
+  const lockMs = m.lock - Date.now();
   const soon = lockMs > 0 && lockMs < 3.6e6 * 3; // predictions close within 3h
   return (
     <div style={{ ...S.mCard, ...(has ? S.mCardDone : {}), borderLeft: `3px solid ${m.accent}` }}>
@@ -562,7 +571,7 @@ function PredictCard({ m, pred, setPred, locked }) {
   );
 }
 
-function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred, desktop }) {
+function MatchesView({ upcoming, live, futureLocked, lockedPending, me, predictions, setPred, desktop }) {
   const myPreds = predictions[me.id] || {};
   const hasPick = (m) => { const p = myPreds[m.id]; return p && p.h !== "" && p.a !== "" && p.h != null && p.a != null; };
   const unpicked = upcoming.filter((m) => !hasPick(m)).length;
@@ -578,44 +587,61 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred, d
   });
   const nextDays = futureByDay.slice(0, 2);
 
+  const nothingToShow = upcoming.length === 0 && lockedPending.length === 0 && nextDays.length === 0;
+
   return (
     <div style={S.col}>
-      {live.length > 0 && (
+      {upcoming.length > 0 && (
         <section>
-          <div style={S.sectionHead}><span style={S.liveDot} /> In progress / awaiting result</div>
+          <div style={S.sectionHead}>
+            Open to predict
+            {unpicked > 0 && <span style={S.badge}>{unpicked} to predict</span>}
+          </div>
+          <div style={S.dayLabel}>Matches open until tonight's 9 PM IST cutoff</div>
           <div style={gridStyle}>
-          {live.map((m) => {
+            {upcoming.map((m) => (
+              <PredictCard key={m.id} m={m} pred={myPreds[m.id]} setPred={setPred} locked={false} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {lockedPending.length > 0 && (
+        <section>
+          <div style={S.sectionHead}>Locked / awaiting kickoff <span style={S.lockBadge}>🔒 closed</span></div>
+          <div style={gridStyle}>
+          {lockedPending.map((m) => {
             const has = hasPick(m); const p = myPreds[m.id];
+            const inProgress = m.kickedOff;
             return (
-              <div key={m.id} style={{ ...S.mCard, opacity: 0.86, borderLeft: `3px solid ${m.accent}` }}>
-                <div style={S.mTop}><span style={S.grpTag}>{tagOf(m)}</span><span style={{ ...S.kick, color: V.live }}>● live / pending</span></div>
-                <div style={S.venueRow}><span style={{ ...S.venueDot, background: m.accent }} /><span style={S.venueText}>{m.city}{m.country ? `, ${m.country}` : ""}</span></div>
-                <div style={S.liveTeams}>
-                  <span>{flag(m.home)} {m.home}</span><span style={{ color: V.sub }}>vs</span><span>{m.away} {flag(m.away)}</span>
+              <div key={m.id} style={{ ...S.mCard, opacity: 0.92, borderLeft: `3px solid ${m.accent}` }}>
+                <div style={S.mTop}>
+                  <span style={S.grpTag}>{tagOf(m)}</span>
+                  {inProgress
+                    ? <span style={{ ...S.kick, color: V.live, display: "flex", alignItems: "center", gap: 6 }}><span style={S.liveDot} /> in progress</span>
+                    : <span style={S.kick}>{fmtKickIST(m.kickoff)}</span>}
                 </div>
-                <div style={S.lockedTag}>{has ? `Your pick: ${p.h}-${p.a} · scores from the final result` : "No pick — locked"}</div>
+                <div style={S.venueRow}><span style={{ ...S.venueDot, background: m.accent }} /><span style={S.venueText}>{m.city}{m.country ? `, ${m.country}` : ""}</span></div>
+                <div style={S.mTeams}>
+                  <div style={S.teamCell}><span style={S.flag}>{flag(m.home)}</span><span style={S.teamLbl}>{m.home}</span></div>
+                  <div style={S.scoreBox}>
+                    <div style={{ ...S.scoreInput, display: "grid", placeItems: "center", color: has ? V.text : V.sub }}>{has ? p.h : "–"}</div>
+                    <span style={S.colon}>:</span>
+                    <div style={{ ...S.scoreInput, display: "grid", placeItems: "center", color: has ? V.text : V.sub }}>{has ? p.a : "–"}</div>
+                  </div>
+                  <div style={S.teamCell}><span style={S.flag}>{flag(m.away)}</span><span style={S.teamLbl}>{m.away}</span></div>
+                </div>
+                <div style={S.lockedTag}>
+                  {has
+                    ? `🔒 Your locked pick: ${p.h}-${p.a}${inProgress ? " · scores from the final result" : " · awaiting kickoff"}`
+                    : "No pick locked in for this match"}
+                </div>
               </div>
             );
           })}
           </div>
         </section>
       )}
-
-      <section>
-        <div style={S.sectionHead}>
-          Open to predict
-          {unpicked > 0 && <span style={S.badge}>{unpicked} to predict</span>}
-        </div>
-        <div style={S.dayLabel}>Matches kicking off within 24 hours</div>
-        {upcoming.length === 0 && (
-          <div style={S.empty}>Nothing open right now. Each match opens 24 hours before kickoff.</div>
-        )}
-        <div style={gridStyle}>
-          {upcoming.map((m) => (
-            <PredictCard key={m.id} m={m} pred={myPreds[m.id]} setPred={setPred} locked={false} />
-          ))}
-        </div>
-      </section>
 
       {nextDays.length > 0 && (
         <section>
@@ -633,6 +659,10 @@ function MatchesView({ upcoming, live, futureLocked, me, predictions, setPred, d
             </div>
           ))}
         </section>
+      )}
+
+      {nothingToShow && (
+        <div style={S.empty}>No matches to predict right now. Check back when the next match day opens (midnight IST), or see played matches under Results.</div>
       )}
     </div>
   );
