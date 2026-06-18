@@ -5,7 +5,7 @@ import {
   STAGE_LABEL, STAGE_ORDER, isKnockout, normalizeDbFixture,
 } from "./data.js";
 import {
-  signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange,
+  signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange, renameProfile,
   amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult, getLeaderboard, getAdminPlayers,
   requestPasswordReset, updatePassword, getFixtures, getPredictionStats, isAllowedEmail, ALLOWED_DOMAIN,
 } from "./db.js";
@@ -78,6 +78,18 @@ export default function App() {
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 1800); };
 
   const signOut = async () => { await dbSignOut(); setMe(null); setIsOrganizer(false); };
+
+  // Change display name: persists via db (own-row only, unique-enforced),
+  // updates local state, and refreshes the leaderboard so the new name shows.
+  const handleRename = async (newName) => {
+    const res = await renameProfile(newName);
+    if (res?.name) {
+      setMe((m) => (m ? { ...m, name: res.name } : m));
+      flash("Name updated");
+      refresh();
+    }
+    return res;
+  };
 
   const setPred = async (mid, side, val) => {
     if (!me) return;
@@ -181,7 +193,7 @@ export default function App() {
         <div style={{ ...S.shell, gridTemplateColumns: showRail ? "248px 1fr 320px" : "248px 1fr" }}>
           <Sidebar me={me} myRank={myRank} myPts={myRow?.total ?? 0} total={leaderboard.length}
             view={view} setView={setView} signOut={signOut} liveCount={live.length}
-            adminMode={adminMode} setAdminMode={setAdminMode} isOrganizer={isOrganizer} />
+            adminMode={adminMode} setAdminMode={setAdminMode} isOrganizer={isOrganizer} onRename={handleRename} />
           <main style={S.deskMain}>{content}</main>
           {showRail && <LeaderboardRail leaderboard={leaderboard} me={me} myRank={myRank} />}
         </div>
@@ -196,7 +208,7 @@ export default function App() {
       <style>{CSS}</style>
       <TopBar me={me} myRank={myRank} myPts={myRow?.total ?? 0} total={leaderboard.length}
         view={view} setView={setView} signOut={signOut}
-        adminMode={adminMode} setAdminMode={setAdminMode} isOrganizer={isOrganizer} />
+        adminMode={adminMode} setAdminMode={setAdminMode} isOrganizer={isOrganizer} onRename={handleRename} />
       <main style={S.main}>{content}</main>
       <BottomNav view={view} setView={setView} adminMode={adminMode && isOrganizer} liveCount={live.length} />
       {toast && <div style={S.toast}>{toast}</div>}
@@ -404,7 +416,57 @@ function RecoveryScreen({ onDone, flash }) {
 }
 
 /* ---- Desktop sidebar nav ---- */
-function Sidebar({ me, myRank, myPts, total, view, setView, signOut, liveCount, adminMode, setAdminMode, isOrganizer }) {
+// Inline display-name editor for the sidebar. Shows current name with an Edit
+// affordance; expands to an input that saves via onRename (which calls the
+// uniqueness-enforcing db.renameProfile and updates app state on success).
+function NameEditor({ me, onRename }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(me?.name || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const start = () => { setVal(me?.name || ""); setErr(""); setEditing(true); };
+  const cancel = () => { setEditing(false); setErr(""); };
+  const save = async () => {
+    const next = val.trim();
+    if (next === (me?.name || "")) { setEditing(false); return; }
+    setBusy(true); setErr("");
+    const res = await onRename(next);
+    setBusy(false);
+    if (res?.error) { setErr(res.error); return; }
+    setEditing(false);
+  };
+
+  if (!editing) {
+    return (
+      <div style={S.nameRow}>
+        <div style={S.nameWrap}>
+          <div style={S.nameLabel}>Signed in as</div>
+          <div style={S.nameValue}>{me?.name}</div>
+        </div>
+        <button className="ghost" style={S.nameEditBtn} onClick={start}>Edit</button>
+      </div>
+    );
+  }
+  return (
+    <div style={S.nameEdit}>
+      <div style={S.nameLabel}>Display name</div>
+      <input value={val} maxLength={24} autoFocus
+        onChange={(e) => { setVal(e.target.value); setErr(""); }}
+        onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") cancel(); }}
+        style={S.nameInput} />
+      {err && <div style={S.nameErr}>{err}</div>}
+      <div style={S.nameBtns}>
+        <button className="ghost" style={S.nameCancel} onClick={cancel} disabled={busy}>Cancel</button>
+        <button className="primary" style={{ ...S.nameSave, opacity: busy ? 0.6 : 1 }} onClick={save} disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ me, myRank, myPts, total, view, setView, signOut, liveCount, adminMode, setAdminMode, isOrganizer, onRename }) {
   const items = [
     { key: "matches", icon: "⚽", label: "Matches", badge: liveCount > 0 ? liveCount : null },
     { key: "results", icon: "📋", label: "Results" },
@@ -429,6 +491,7 @@ function Sidebar({ me, myRank, myPts, total, view, setView, signOut, liveCount, 
         ))}
       </nav>
       <div style={S.sbFoot}>
+        <NameEditor me={me} onRename={onRename} />
         <div style={S.sbRankCard}>
           <div style={S.sbRankLabel}>Your standing</div>
           <div style={S.sbRankBig}><span style={S.sbRankPos}>#{myRank || "—"}</span><span style={S.sbRankOf}>of {total}</span></div>
@@ -475,8 +538,9 @@ function LeaderboardRail({ leaderboard, me, myRank }) {
   );
 }
 
-function TopBar({ me, myRank, myPts, total, signOut, adminMode, setAdminMode, isOrganizer }) {
+function TopBar({ me, myRank, myPts, total, signOut, adminMode, setAdminMode, isOrganizer, onRename }) {
   const [menu, setMenu] = useState(false);
+  const [editingName, setEditingName] = useState(false);
   return (
     <header style={S.top}>
       <div style={S.topInner}>
@@ -495,9 +559,20 @@ function TopBar({ me, myRank, myPts, total, signOut, adminMode, setAdminMode, is
             <span style={{ fontWeight: 800 }}>{myPts}</span>
             <span style={{ color: V.sub, fontSize: 11 }}>pts</span>
           </div>
-          <button className="ghost" style={S.gear} onClick={() => setMenu((m) => !m)}>⋯</button>
+          <button className="ghost" style={S.gear} onClick={() => { setMenu((m) => !m); setEditingName(false); }}>⋯</button>
           {menu && (
-            <div style={S.menu} onMouseLeave={() => setMenu(false)}>
+            <div style={S.menu} onMouseLeave={() => { setMenu(false); setEditingName(false); }}>
+              {editingName ? (
+                <div style={{ padding: 6 }}>
+                  <NameEditor me={me} onRename={async (n) => {
+                    const res = await onRename(n);
+                    if (res?.name) { setEditingName(false); setMenu(false); }
+                    return res;
+                  }} />
+                </div>
+              ) : (
+                <button className="menuitem" style={S.menuItem} onClick={() => setEditingName(true)}>Edit display name</button>
+              )}
               {isOrganizer && (
                 <button className="menuitem" style={S.menuItem} onClick={() => { setAdminMode((a) => !a); setMenu(false); }}>
                   {adminMode ? "Hide organizer tools" : "Organizer: enter results"}
@@ -1093,6 +1168,17 @@ const S = {
   sbIcon: { fontSize: 19, width: 22, textAlign: "center" },
   sbBadge: { marginLeft: "auto", background: V.magenta, color: "#fff", fontSize: 10, fontWeight: 800, padding: "2px 7px", borderRadius: 10, fontFamily: FONT },
   sbFoot: { marginTop: "auto" },
+  nameRow: { display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", marginBottom: 10, borderRadius: 12, background: "rgba(255,255,255,.04)", border: `1px solid ${V.strokeSoft}` },
+  nameWrap: { flex: 1, minWidth: 0 },
+  nameLabel: { fontSize: 10, color: V.sub, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", fontFamily: DISPLAY },
+  nameValue: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 15, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 },
+  nameEditBtn: { background: "none", border: `1px solid ${V.strokeSoft}`, color: V.cyan, fontFamily: DISPLAY, fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: .5, padding: "6px 10px", borderRadius: 8, cursor: "pointer", flexShrink: 0 },
+  nameEdit: { padding: 12, marginBottom: 10, borderRadius: 12, background: "rgba(255,255,255,.04)", border: `1px solid ${V.strokeSoft}` },
+  nameInput: { width: "100%", boxSizing: "border-box", marginTop: 6, padding: "10px 12px", borderRadius: 8, background: "rgba(0,0,0,.3)", border: `1px solid ${V.stroke}`, color: "#fff", fontFamily: FONT, fontSize: 14 },
+  nameErr: { color: V.red, fontSize: 12, marginTop: 6 },
+  nameBtns: { display: "flex", gap: 8, marginTop: 10 },
+  nameCancel: { flex: 1, background: "none", border: `1px solid ${V.strokeSoft}`, color: V.sub, padding: "8px 0", borderRadius: 8, fontFamily: DISPLAY, fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: .5, cursor: "pointer" },
+  nameSave: { flex: 1, border: "none", color: "#04121a", padding: "8px 0", borderRadius: 8, fontFamily: DISPLAY, fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: .5, cursor: "pointer" },
   sbRankCard: { padding: 16, borderRadius: 14, background: "rgba(255,255,255,.04)", border: `1px solid ${V.strokeSoft}` },
   sbRankLabel: { fontSize: 10, color: V.sub, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", fontFamily: DISPLAY },
   sbRankBig: { display: "flex", alignItems: "baseline", gap: 8, marginTop: 6 },

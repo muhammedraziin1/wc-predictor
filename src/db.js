@@ -110,6 +110,31 @@ export function onAuthChange(cb) {
   return () => data.subscription.unsubscribe();
 }
 
+// Change the current user's display name. Updates ONLY their own row (RLS
+// enforces this server-side), trims input, caps length, enforces uniqueness.
+// Returns { name } on success or { error }.
+export async function renameProfile(newName) {
+  const name = (newName || "").trim();
+  if (!name) return { error: "Enter a display name." };
+  if (name.length > 24) return { error: "Display name must be 24 characters or fewer." };
+
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) return { error: "Not signed in." };
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .update({ name })
+    .eq("id", session.user.id)   // own row only
+    .select("name")
+    .maybeSingle();
+  if (error) {
+    if (error.code === "23505") return { error: "That display name is taken." };
+    return { error: error.message };
+  }
+  if (!data) return { error: "Couldn't update your name. Please try again." };
+  return { name: data.name };
+}
+
 // Is the current user an organizer?
 export async function amIOrganizer() {
   const { data: { session } } = await supabase.auth.getSession();
