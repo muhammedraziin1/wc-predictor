@@ -6,7 +6,7 @@ import {
 } from "./data.js";
 import {
   signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange,
-  amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult, getLeaderboard,
+  amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult, getLeaderboard, getAdminPlayers,
   requestPasswordReset, updatePassword, getFixtures, getPredictionStats, isAllowedEmail, ALLOWED_DOMAIN,
 } from "./db.js";
 import { supabaseConfigured } from "./supabase.js";
@@ -893,35 +893,84 @@ function MyPicksView({ enriched, me, predictions, desktop }) {
 
 function AdminView({ enriched, results, setResult }) {
   const [filter, setFilter] = useState("pending");
+  const [tab, setTab] = useState("results"); // results | players
+  const [players, setPlayers] = useState(null);
+  const [loadingPlayers, setLoadingPlayers] = useState(false);
+  const [playerErr, setPlayerErr] = useState("");
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    if (tab !== "players" || players !== null) return;
+    setLoadingPlayers(true);
+    getAdminPlayers()
+      .then((rows) => setPlayers(rows))
+      .catch((e) => setPlayerErr(e.message || "Couldn't load players"))
+      .finally(() => setLoadingPlayers(false));
+  }, [tab, players]);
+
   const list = enriched.filter((m) =>
     filter === "all" ? true : filter === "pending" ? (m.locked && !m.settled) : m.settled
   );
+  const filteredPlayers = (players || []).filter((p) => {
+    const s = q.trim().toLowerCase();
+    return !s || p.name.toLowerCase().includes(s) || (p.email || "").toLowerCase().includes(s);
+  });
+
   return (
     <div style={S.col}>
       <section>
-        <div style={S.sectionHead}>Organizer · enter actual results</div>
-        <p style={S.foot}>Enter the 90′ + stoppage score. Points compute for everyone instantly. Players never see this screen.</p>
         <div style={S.filterRow}>
-          {["pending", "done", "all"].map((f) => (
-            <button key={f} className="ghost" style={{ ...S.filterBtn, ...(filter === f ? S.filterOn : {}) }} onClick={() => setFilter(f)}>{f}</button>
-          ))}
+          <button className="ghost" style={{ ...S.filterBtn, ...(tab === "results" ? S.filterOn : {}) }} onClick={() => setTab("results")}>Enter results</button>
+          <button className="ghost" style={{ ...S.filterBtn, ...(tab === "players" ? S.filterOn : {}) }} onClick={() => setTab("players")}>Players</button>
         </div>
-        {list.map((m) => {
-          const r = results[m.id] || {};
-          return (
-            <div key={m.id} style={S.adminRow}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={S.pickTeams}>{flag(m.home)} {m.home} <span style={{ color: V.sub }}>v</span> {m.away} {flag(m.away)}</div>
-                <div style={S.pickMeta}>{tagOf(m)} · {m.city} · {fmtKick(m.kickoff)}</div>
-              </div>
-              <div style={S.scoreBox}>
-                <input className="num" inputMode="numeric" value={r.h ?? ""} onChange={(e) => setResult(m.id, "h", e.target.value)} placeholder="–" style={S.scoreInput} />
-                <span style={S.colon}>:</span>
-                <input className="num" inputMode="numeric" value={r.a ?? ""} onChange={(e) => setResult(m.id, "a", e.target.value)} placeholder="–" style={S.scoreInput} />
-              </div>
+
+        {tab === "results" && (
+          <>
+            <div style={S.sectionHead}>Organizer · enter actual results</div>
+            <p style={S.foot}>Enter the 90′ + stoppage score. Points compute for everyone instantly. Players never see this screen.</p>
+            <div style={S.filterRow}>
+              {["pending", "done", "all"].map((f) => (
+                <button key={f} className="ghost" style={{ ...S.filterBtn, ...(filter === f ? S.filterOn : {}) }} onClick={() => setFilter(f)}>{f}</button>
+              ))}
             </div>
-          );
-        })}
+            {list.map((m) => {
+              const r = results[m.id] || {};
+              return (
+                <div key={m.id} style={S.adminRow}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={S.pickTeams}>{flag(m.home)} {m.home} <span style={{ color: V.sub }}>v</span> {m.away} {flag(m.away)}</div>
+                    <div style={S.pickMeta}>{tagOf(m)} · {m.city} · {fmtKick(m.kickoff)}</div>
+                  </div>
+                  <div style={S.scoreBox}>
+                    <input className="num" inputMode="numeric" value={r.h ?? ""} onChange={(e) => setResult(m.id, "h", e.target.value)} placeholder="–" style={S.scoreInput} />
+                    <span style={S.colon}>:</span>
+                    <input className="num" inputMode="numeric" value={r.a ?? ""} onChange={(e) => setResult(m.id, "a", e.target.value)} placeholder="–" style={S.scoreInput} />
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        {tab === "players" && (
+          <>
+            <div style={S.sectionHead}>Organizer · player directory</div>
+            <p style={S.foot}>Name and registered email for every player. Visible to organizers only, never on the public leaderboard.</p>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or email…" style={S.signInput} />
+            {loadingPlayers && <div style={S.empty}>Loading players…</div>}
+            {playerErr && <div style={S.signErr}>{playerErr}</div>}
+            {players && filteredPlayers.length === 0 && <div style={S.empty}>No players match that search.</div>}
+            {filteredPlayers.map((p) => (
+              <div key={p.id} style={S.adminRow}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={S.pickTeams}>{p.name}</div>
+                  <div style={S.pickMeta}>{p.email} · {p.picks} pick{p.picks === 1 ? "" : "s"}</div>
+                </div>
+              </div>
+            ))}
+            {players && <p style={S.foot}>{players.length} player{players.length === 1 ? "" : "s"} registered.</p>}
+          </>
+        )}
       </section>
     </div>
   );

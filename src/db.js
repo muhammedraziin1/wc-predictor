@@ -122,6 +122,14 @@ export async function amIOrganizer() {
   return Boolean(data);
 }
 
+// Organizer-only: name + email + pick count for every player. Returns [] for
+// non-organizers (the RPC enforces this server-side; see admin_players.sql).
+export async function getAdminPlayers() {
+  const { data, error } = await supabase.rpc("admin_players");
+  if (error) throw error;
+  return (data || []).map((r) => ({ id: r.user_id, name: r.name, email: r.email, picks: r.picks }));
+}
+
 /* --------------------------- roster --------------------------- */
 // All players (profiles) for the leaderboard. -> [{ id, name }]
 export async function getPlayers() {
