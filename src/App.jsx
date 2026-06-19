@@ -897,29 +897,50 @@ function MatchStats({ m }) {
 
 function LeaderboardView({ leaderboard, me, fullPage }) {
   const [open, setOpen] = useState(null);
+  const [q, setQ] = useState("");
   const meRef = useRef(null);
   const myIdx = leaderboard.findIndex((r) => r.id === me.id);
   const jumpToMe = () => meRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+  // Search by display name OR the local part of the email (name in the email).
+  const s = q.trim().toLowerCase();
+  const matches = (r) => {
+    if (!s) return true;
+    const emailLocal = (r.email || "").split("@")[0].toLowerCase();
+    return r.name.toLowerCase().includes(s) || emailLocal.includes(s) || (r.email || "").toLowerCase().includes(s);
+  };
+  // Keep the true rank (index in the full, sorted board) even while filtering.
+  const rows = leaderboard.map((r, i) => ({ r, rank: i })).filter(({ r }) => matches(r));
+
   return (
     <div style={S.col}>
       <section>
         <div style={S.sectionHead}>
           {fullPage ? "Leaderboard" : "Live leaderboard"}
           {leaderboard.length > 0 && <span style={S.badge}>{leaderboard.length} player{leaderboard.length === 1 ? "" : "s"}</span>}
-          {fullPage && myIdx >= 0 && (
+          {fullPage && myIdx >= 0 && !s && (
             <button className="ghost" style={S.jumpBtn} onClick={jumpToMe}>↓ Jump to my position (#{myIdx + 1})</button>
           )}
         </div>
+
+        <input value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="Search by name or email…" style={S.lbSearch} />
+
         {leaderboard.length === 0 && <div style={S.empty}>The board is empty. First prediction puts you on top.</div>}
+        {leaderboard.length > 0 && rows.length === 0 && <div style={S.empty}>No players match “{q}”.</div>}
+
         <div style={S.lbList}>
-          {leaderboard.map((r, i) => {
+          {rows.map(({ r, rank }) => {
             const isMe = r.id === me.id;
             return (
-              <div key={r.id} ref={isMe ? meRef : null}>
+              <div key={r.id} ref={isMe && !s ? meRef : null}>
                 <div className="lbrow" style={{ ...S.lbRow, ...(isMe ? S.lbMe : {}) }}
                   onClick={() => setOpen(open === r.id ? null : r.id)}>
-                  <span style={S.lbRank(i)}>{i + 1}</span>
-                  <span style={S.lbName}>{r.name}{isMe && <span style={S.youTag}>you</span>}</span>
+                  <span style={S.lbRank(rank)}>{rank + 1}</span>
+                  <span style={S.lbNameWrap}>
+                    <span style={S.lbName}>{r.name}{isMe && <span style={S.youTag}>you</span>}</span>
+                    {r.email && <span style={S.lbEmail}>{r.email}</span>}
+                  </span>
                   <span style={S.lbStat}>{r.exact}× exact</span>
                   <span style={S.lbStat}>{r.made} picks</span>
                   <span style={S.lbPts}>{r.total}</span>
@@ -1301,7 +1322,10 @@ const S = {
   lbRank: (i) => ({ width: 36, height: 36, borderRadius: 10, display: "grid", placeItems: "center", fontWeight: 700, fontSize: 18, flexShrink: 0, fontFamily: NUM, color: "#04121a",
     background: i === 0 ? "linear-gradient(135deg,#FFC83D,#FF9E2D)" : i === 1 ? "linear-gradient(135deg,#D7E0F0,#9FB0CC)" : i === 2 ? "linear-gradient(135deg,#E0954E,#B36A2E)" : "rgba(255,255,255,.1)",
     boxShadow: i < 3 ? "0 0 18px rgba(255,200,61,.3)" : "none", ...(i > 2 ? { color: "#fff" } : {}) }),
-  lbName: { flex: 1, fontFamily: DISPLAY, fontWeight: 700, fontSize: 18, display: "flex", alignItems: "center", gap: 8, minWidth: 0, textTransform: "uppercase", letterSpacing: .5, color: "#fff" },
+  lbNameWrap: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 },
+  lbName: { fontFamily: DISPLAY, fontWeight: 700, fontSize: 18, display: "flex", alignItems: "center", gap: 8, minWidth: 0, textTransform: "uppercase", letterSpacing: .5, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  lbEmail: { fontSize: 11, color: V.sub, fontFamily: FONT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textTransform: "none", letterSpacing: 0 },
+  lbSearch: { width: "100%", boxSizing: "border-box", margin: "4px 0 14px", padding: "12px 14px", borderRadius: 12, background: "rgba(0,0,0,.25)", border: `1px solid ${V.stroke}`, color: "#fff", fontFamily: FONT, fontSize: 14 },
   youTag: { fontSize: 10, fontWeight: 700, color: "#04121a", background: V.cyan, borderRadius: 5, padding: "2px 7px", letterSpacing: .5, boxShadow: "0 0 12px rgba(0,229,255,.5)" },
   lbStat: { color: V.sub, fontSize: 11, whiteSpace: "nowrap", fontWeight: 600, fontFamily: NUM },
   lbPts: { fontFamily: NUM, fontWeight: 700, fontSize: 30, minWidth: 46, textAlign: "right", color: "#fff", textShadow: "0 0 16px rgba(0,229,255,.4)" },

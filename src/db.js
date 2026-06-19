@@ -190,7 +190,7 @@ export async function getLeaderboard() {
   const { data, error } = await supabase.rpc("leaderboard");
   if (error) throw error;
   return (data || []).map((r) => ({
-    id: r.user_id, name: r.name, total: r.total, exact: r.exact, made: r.made,
+    id: r.user_id, name: r.name, email: r.email, total: r.total, exact: r.exact, made: r.made,
   }));
 }
 
