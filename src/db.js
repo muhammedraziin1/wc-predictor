@@ -261,3 +261,13 @@ export async function getPredictionStats(matchId) {
   }
   return { total, homeWin, draw, awayWin, topScores: topScores.slice(0, 4) };
 }
+
+// Golden Boot top scorers. Written by the sync edge function (service role),
+// readable by everyone via the scorers_read policy.
+export async function getScorers() {
+  const { data, error } = await supabase
+    .from("scorers")
+    .select("player_id, player, team, goals");
+  if (error) { console.warn("getScorers: ", error.message); return []; }
+  return data || [];
+}

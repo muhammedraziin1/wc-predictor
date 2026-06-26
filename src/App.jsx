@@ -8,8 +8,10 @@ import {
   signUp, signIn, signOut as dbSignOut, getMe, ensureProfile, onAuthChange, renameProfile,
   amIOrganizer, getPlayers, getPredictions, savePrediction, getResults, saveResult, getLeaderboard, getAdminPlayers,
   requestPasswordReset, updatePassword, getFixtures, getPredictionStats, isAllowedEmail, ALLOWED_DOMAIN,
+  getScorers,
 } from "./db.js";
 import { supabaseConfigured } from "./supabase.js";
+import { BracketView, ScorersView } from "./Bracket.jsx";
 
 // Responsive breakpoints (match the mockup): desktop ≥1200 has the rail,
 // 920–1200 has sidebar+content, <920 is the mobile shell.
@@ -32,6 +34,7 @@ export default function App() {
   const [predictions, setPredictions] = useState({}); // {uid:{mid:{h,a}}}
   const [results, setResults] = useState({});      // {mid:{h,a,adv?}}
   const [koFixtures, setKoFixtures] = useState([]); // dynamic knockout fixtures from DB
+  const [scorers, setScorers] = useState([]);       // golden-boot top scorers from DB
   const [view, setView] = useState("matches");
   const [loaded, setLoaded] = useState(false);
   const [tick, setTick] = useState(0);
@@ -43,8 +46,8 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [pl, pr, rs, fx, lb] = await Promise.all([getPlayers(), getPredictions(), getResults(), getFixtures(), getLeaderboard()]);
-      setPlayers(pl); setPredictions(pr); setResults(rs); setKoFixtures(fx); setLeaderboard(lb);
+      const [pl, pr, rs, fx, lb, sc] = await Promise.all([getPlayers(), getPredictions(), getResults(), getFixtures(), getLeaderboard(), getScorers()]);
+      setPlayers(pl); setPredictions(pr); setResults(rs); setKoFixtures(fx); setLeaderboard(lb); setScorers(sc);
     } catch (e) { console.error("refresh failed", e); }
   }, []);
 
@@ -180,6 +183,8 @@ export default function App() {
       {view === "mypicks" && (
         <MyPicksView enriched={enriched} me={me} predictions={predictions} desktop={vp.isDesktop} />
       )}
+      {view === "bracket" && <BracketView koFixtures={koFixtures} results={effectiveResults} />}
+      {view === "scorers" && <ScorersView scorers={scorers} />}
       {view === "admin" && adminMode && isOrganizer && (
         <AdminView enriched={enriched} results={effectiveResults} setResult={setResultVal} />
       )}
@@ -472,6 +477,8 @@ function Sidebar({ me, myRank, myPts, total, view, setView, signOut, liveCount, 
     { key: "results", icon: "📋", label: "Results" },
     { key: "mypicks", icon: "🎯", label: "My picks" },
     { key: "leaderboard", icon: "🏆", label: "Leaderboard" },
+    { key: "bracket", icon: "🗺️", label: "Bracket" },
+    { key: "scorers", icon: "👟", label: "Golden Boot" },
   ];
   if (adminMode && isOrganizer) items.push({ key: "admin", icon: "🛠", label: "Enter results" });
   return (
@@ -1073,7 +1080,7 @@ function AdminView({ enriched, results, setResult }) {
 }
 
 function BottomNav({ view, setView, adminMode, liveCount }) {
-  const items = [["matches", "Matches", "⚽"], ["results", "Results", "📋"], ["mypicks", "My picks", "🎯"], ["leaderboard", "Board", "🏆"]];
+  const items = [["matches", "Matches", "⚽"], ["results", "Results", "📋"], ["mypicks", "My picks", "🎯"], ["leaderboard", "Board", "🏆"], ["bracket", "Bracket", "🗺️"], ["scorers", "Boot", "👟"]];
   if (adminMode) items.push(["admin", "Results", "⚙️"]);
   return (
     <nav style={S.bottom}>

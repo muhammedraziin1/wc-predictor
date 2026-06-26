@@ -29,6 +29,7 @@ const ALIASES: Record<string, string> = {
   "iriran": "iran",
   "czechrepublic": "czechia",
   "turkiye": "turkiye",
+  "turkey": "turkiye",        // football-data.org sends "Turkey", not "Türkiye"
   "cotedivoire": "ivorycoast",
   "ivorycoast": "ivorycoast",
   "capeverdeislands": "capeverde",
@@ -134,7 +135,30 @@ const STAGE_MAP: Record<string, string> = {
 // Best-effort venue accent for KO matches (cyan default; matches theme).
 const KO_ACCENT = "#00E5FF";
 
-Deno.serve(async (_req) => {
+// football-data spells four nations differently than the app's FLAG map, so the
+// Golden Boot would show ⚽ instead of a flag for them. Map THEIR name -> OUR
+// display name (the FLAG keys) before storing. Everything else passes through.
+const TEAM_DISPLAY: Record<string, string> = {
+  "Turkey": "Türkiye",
+  "Bosnia-Herzegovina": "Bosnia & Herzegovina",
+  "Cape Verde Islands": "Cape Verde",
+  "Congo DR": "DR Congo",
+};
+const teamDisp = (n: string | null | undefined): string | null =>
+  n == null ? null : (TEAM_DISPLAY[n] ?? n);
+
+Deno.serve(async (req) => {
+  // ---- AUTH GATE: reject anyone who doesn't present the shared secret. ----
+  // Set it once:  supabase secrets set SYNC_SECRET=<long-random-string>
+  // and have your scheduler/cron send header  x-sync-secret: <same value>.
+  // This holds even if the function is deployed with --no-verify-jwt.
+  const SYNC_SECRET = Deno.env.get("SYNC_SECRET");
+  if (!SYNC_SECRET || req.headers.get("x-sync-secret") !== SYNC_SECRET) {
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401, headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const token = Deno.env.get("FOOTBALL_DATA_TOKEN");
   const supaUrl = Deno.env.get("SUPABASE_URL");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -187,9 +211,9 @@ Deno.serve(async (_req) => {
       continue;
     }
 
-    // ---- Knockout: create the fixture once both teams are known ----
-    // Skip placeholder rows where teams aren't decided yet.
-    if (!home || !away) { continue; }
+    // ---- Knockout: create/refresh the fixture as soon as ONE side is known ----
+    // Renders "Spain vs TBD" in the bracket; the empty side ("") fills in later.
+    if (!home && !away) { continue; }
     const koId = `K${m.id}`;            // stable id from the API match id
     const kickoff = m.utcDate;          // ISO string
     if (!kickoff) { continue; }
@@ -228,7 +252,31 @@ Deno.serve(async (_req) => {
     }
   }
 
-  return new Response(JSON.stringify({ ok: true, written, koCreated, skipped, unmatched }), {
+  // ---- Golden Boot: tournament top scorers (free-tier scorers endpoint) ----
+  let scorersWritten = 0;
+  try {
+    const sres = await fetch("https://api.football-data.org/v4/competitions/WC/scorers?limit=50", {
+      headers: { "X-Auth-Token": token },
+    });
+    if (sres.ok) {
+      const sjson = await sres.json();
+      const rows = (sjson.scorers || [])
+        .filter((s: any) => s.player?.id)
+        .map((s: any) => ({
+          player_id: s.player.id,
+          player: s.player.name ?? "",
+          team: teamDisp(s.team?.name),
+          goals: s.goals ?? 0,
+          updated_at: new Date().toISOString(),
+        }));
+      if (rows.length) {
+        const { error } = await supabase.from("scorers").upsert(rows, { onConflict: "player_id" });
+        if (!error) scorersWritten = rows.length;
+      }
+    }
+  } catch (_e) { /* non-fatal: the board just won't refresh this tick */ }
+
+  return new Response(JSON.stringify({ ok: true, written, koCreated, skipped, scorersWritten, unmatched }), {
     headers: { "Content-Type": "application/json" },
   });
 });
