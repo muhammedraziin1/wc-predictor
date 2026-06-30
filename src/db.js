@@ -174,12 +174,12 @@ export async function getPredictions() {
   if (!session?.user) return {};
   const { data, error } = await supabase
     .from("predictions")
-    .select("user_id, match_id, home, away")
+    .select("user_id, match_id, home, away, adv_pick")
     .eq("user_id", session.user.id);
   if (error) throw error;
   const out = {};
   for (const row of data || []) {
-    (out[row.user_id] ||= {})[row.match_id] = { h: row.home, a: row.away };
+    (out[row.user_id] ||= {})[row.match_id] = { h: row.home, a: row.away, adv: row.adv_pick ?? null };
   }
   return out;
 }
@@ -195,11 +195,11 @@ export async function getLeaderboard() {
 }
 
 // Upsert the logged-in user's prediction. RLS guarantees user_id = auth.uid().
-export async function savePrediction(userId, matchId, home, away) {
+export async function savePrediction(userId, matchId, home, away, advPick = null) {
   const { error } = await supabase
     .from("predictions")
     .upsert(
-      { user_id: userId, match_id: matchId, home, away },
+      { user_id: userId, match_id: matchId, home, away, adv_pick: advPick },
       { onConflict: "user_id,match_id" }
     );
   if (error) throw error;
@@ -260,14 +260,4 @@ export async function getPredictionStats(matchId) {
     topScores.push({ score: r.scoreline, n: r.n });
   }
   return { total, homeWin, draw, awayWin, topScores: topScores.slice(0, 4) };
-}
-
-// Golden Boot top scorers. Written by the sync edge function (service role),
-// readable by everyone via the scorers_read policy.
-export async function getScorers() {
-  const { data, error } = await supabase
-    .from("scorers")
-    .select("player_id, player, team, goals");
-  if (error) { console.warn("getScorers: ", error.message); return []; }
-  return data || [];
 }

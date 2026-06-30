@@ -232,9 +232,24 @@ Deno.serve(async (req) => {
 
     // if finished, write the result (post-ET goals + who advanced)
     if (m.status === "FINISHED") {
-      const ft = m.score?.fullTime ?? {};
-      // football-data 'fullTime' includes extra time for KO matches.
+      const sc = m.score ?? {};
+      const ft = sc.fullTime ?? {};
+      // v4 'fullTime' is the FINAL running score: regularTime + extraTime + penalties.
+      // For a shootout that means it carries the penalty tally (e.g. a 1-1 game won
+      // 6-5 on pens reports fullTime 7-6). We want the score the tie was level at,
+      // after ET and BEFORE penalties = regularTime + extraTime  (= fullTime - penalties).
       let hg = ft.home, ag = ft.away;
+      if (sc.duration === "PENALTY_SHOOTOUT") {
+        const rt = sc.regularTime, et = sc.extraTime, pen = sc.penalties;
+        if (rt) {                                   // preferred: explicit pre-pen score
+          hg = (rt.home ?? 0) + (et?.home ?? 0);
+          ag = (rt.away ?? 0) + (et?.away ?? 0);
+        } else if (pen) {                           // fallback: strip shootout off fullTime
+          hg = (ft.home ?? 0) - (pen.home ?? 0);
+          ag = (ft.away ?? 0) - (pen.away ?? 0);
+        }
+        // else: neither exposed -> leave fullTime (degraded; organizer can correct)
+      }
       if (hg == null || ag == null) { continue; }
       // who advanced: prefer explicit winner; fall back to goals.
       const w = m.score?.winner; // 'HOME_TEAM' | 'AWAY_TEAM' | 'DRAW' (DRAW => decided on pens)

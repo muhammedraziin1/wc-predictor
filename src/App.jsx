@@ -101,8 +101,21 @@ export default function App() {
     const nextCell = { ...prev, [side]: clean };
     setPredictions((p) => ({ ...p, [me.id]: { ...p[me.id], [mid]: nextCell } })); // optimistic
     if (nextCell.h !== "" && nextCell.a !== "" && nextCell.h != null && nextCell.a != null) {
-      try { await savePrediction(me.id, mid, nextCell.h, nextCell.a); }
+      try { await savePrediction(me.id, mid, nextCell.h, nextCell.a, nextCell.adv ?? null); }
       catch (e) { console.error("savePrediction failed", e); flash("Save failed — check connection"); }
+    }
+  };
+
+  // KO penalty-winner pick. Only meaningful when the user predicted a level score;
+  // stored in adv_pick and used by the leaderboard RPC for the advancement point.
+  const setAdv = async (mid, advVal) => {
+    if (!me) return;
+    const prev = predictions[me.id]?.[mid] || {};
+    const nextCell = { ...prev, adv: advVal };
+    setPredictions((p) => ({ ...p, [me.id]: { ...p[me.id], [mid]: nextCell } })); // optimistic
+    if (nextCell.h !== "" && nextCell.a !== "" && nextCell.h != null && nextCell.a != null) {
+      try { await savePrediction(me.id, mid, nextCell.h, nextCell.a, advVal); }
+      catch (e) { console.error("saveAdv failed", e); flash("Save failed — check connection"); }
     }
   };
 
@@ -174,7 +187,7 @@ export default function App() {
     <>
       {view === "matches" && (
         <MatchesView upcoming={upcoming} live={live} futureLocked={futureLocked}
-          lockedPending={lockedPending} me={me} predictions={predictions} setPred={setPred} desktop={vp.isDesktop} />
+          lockedPending={lockedPending} me={me} predictions={predictions} setPred={setPred} setAdv={setAdv} desktop={vp.isDesktop} />
       )}
       {view === "leaderboard" && <LeaderboardView leaderboard={leaderboard} me={me} fullPage={vp.isDesktop} />}
       {view === "results" && (
@@ -611,9 +624,10 @@ function FunFact({ home, away, seed }) {
   );
 }
 
-function PredictCard({ m, pred, setPred, locked }) {
+function PredictCard({ m, pred, setPred, setAdv, locked }) {
   const has = pred && pred.h !== "" && pred.a !== "" && pred.h != null && pred.a != null;
   const winner = has ? (+pred.h > +pred.a ? "home" : +pred.h < +pred.a ? "away" : "draw") : null;
+  const needsAdv = m.ko && has && winner === "draw"; // KO + level => who advances on penalties
   const lockMs = m.lock - Date.now();
   const soon = lockMs > 0 && lockMs < 3.6e6 * 3; // predictions close within 3h
   return (
@@ -646,14 +660,31 @@ function PredictCard({ m, pred, setPred, locked }) {
         </div>
       </div>
 
-      {has && !locked && <div style={S.savedTag}>✓ Pick saved · {pred.h}-{pred.a} · edit until {fmtKickIST(m.lock)}</div>}
+      {needsAdv && (
+        <div style={S.advRow}>
+          <span style={{ ...S.advLabel, color: pred.adv ? V.sub : V.amber }}>
+            Level after extra time — who advances on penalties?
+          </span>
+          <div style={S.advBtns}>
+            <button type="button" disabled={locked} onClick={() => setAdv(m.id, "home")}
+              style={{ ...S.advBtn, ...(pred.adv === "home" ? S.advBtnOn : {}) }}>
+              <span style={S.flag}>{flag(m.home)}</span> {m.home}
+            </button>
+            <button type="button" disabled={locked} onClick={() => setAdv(m.id, "away")}
+              style={{ ...S.advBtn, ...(pred.adv === "away" ? S.advBtnOn : {}) }}>
+              <span style={S.flag}>{flag(m.away)}</span> {m.away}
+            </button>
+          </div>
+        </div>
+      )}
+      {has && !locked && <div style={S.savedTag}>✓ Pick saved · {pred.h}-{pred.a}{needsAdv ? (pred.adv ? ` · ${pred.adv === "home" ? m.home : m.away} on pens` : " · pick a penalty winner") : ""} · edit until {fmtKickIST(m.lock)}</div>}
       {!has && !locked && <div style={S.lockedTag}>Predictions close {fmtKickIST(m.lock)}</div>}
       {locked && <div style={S.lockedTag}>🔒 Predictions closed</div>}
     </div>
   );
 }
 
-function MatchesView({ upcoming, live, futureLocked, lockedPending, me, predictions, setPred, desktop }) {
+function MatchesView({ upcoming, live, futureLocked, lockedPending, me, predictions, setPred, setAdv, desktop }) {
   const myPreds = predictions[me.id] || {};
   const hasPick = (m) => { const p = myPreds[m.id]; return p && p.h !== "" && p.a !== "" && p.h != null && p.a != null; };
   const unpicked = upcoming.filter((m) => !hasPick(m)).length;
@@ -682,7 +713,7 @@ function MatchesView({ upcoming, live, futureLocked, lockedPending, me, predicti
           <div style={S.dayLabel}>Matches open until tonight's 9 PM IST cutoff</div>
           <div style={gridStyle}>
             {upcoming.map((m) => (
-              <PredictCard key={m.id} m={m} pred={myPreds[m.id]} setPred={setPred} locked={false} />
+              <PredictCard key={m.id} m={m} pred={myPreds[m.id]} setPred={setPred} setAdv={setAdv} locked={false} />
             ))}
           </div>
         </section>
@@ -1310,6 +1341,11 @@ const S = {
   scoreInput: { width: 52, height: 64, textAlign: "center", background: "rgba(0,0,0,.4)", border: `1px solid ${V.stroke}`, color: "#fff", borderRadius: 12, fontSize: 34, fontWeight: 700, fontFamily: NUM, boxShadow: "inset 0 0 18px rgba(0,229,255,.1)" },
   colon: { color: V.cyan, fontSize: 26, fontWeight: 700, textShadow: "0 0 12px rgba(0,229,255,.8)", fontFamily: NUM },
   savedTag: { marginTop: 24, fontSize: 12, color: V.greenBright, fontWeight: 600, textAlign: "center", letterSpacing: .3 },
+  advRow: { marginTop: 14, padding: "12px 12px 14px", borderRadius: 12, background: "rgba(122,92,255,.08)", border: `1px solid ${V.strokeSoft}` },
+  advLabel: { display: "block", fontSize: 11.5, fontWeight: 600, textAlign: "center", letterSpacing: .2, marginBottom: 10 },
+  advBtns: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 },
+  advBtn: { display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "10px 8px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: V.text, background: V.glass, border: `1px solid ${V.stroke}` },
+  advBtnOn: { background: "rgba(0,229,255,.16)", border: `1px solid ${V.cyan}`, boxShadow: "0 0 0 1px rgba(0,229,255,.25) inset" },
   lockedTag: { marginTop: 24, fontSize: 12, color: V.sub, fontWeight: 500, textAlign: "center" },
   liveTeams: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 15, fontWeight: 700, padding: "4px 0", fontFamily: DISPLAY, textTransform: "uppercase", letterSpacing: .5 },
 
